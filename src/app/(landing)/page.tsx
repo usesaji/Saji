@@ -1,3 +1,9 @@
+import Header from "../../components/landing/Header";
+
 export default function Home() {
-	return <div className="">hello</div>;
+	return (
+		<div className="">
+			<Header />
+		</div>
+	);
 }
