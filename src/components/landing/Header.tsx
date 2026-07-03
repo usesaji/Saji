@@ -4,8 +4,8 @@ import Logo from "../shared/Logo";
 
 const Header = () => {
 	return (
-		<header className="fixed inset-x-0 top-0 bg-white lg:px-10 py-5 sm:py-8 z-40">
-			<div className="custom-container flex justify-between items-center">
+		<header className="fixed inset-x-0 top-0 bg-white lg:px-10 xl:px-20 py-5 sm:py-8 z-40">
+			<div className="custom-container flex justify-between items-center ">
 				<div className="flex items-center gap-10 lg:gap-13">
 					<Logo />
 					<ul className="max-md:hidden flex gap-10 lg:gap-13 text-xl lg:text-2xl">
