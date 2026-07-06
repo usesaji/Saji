@@ -92,7 +92,7 @@
 }
 
 .custom-container {
-	@apply max-w-300 mx-auto px-3 sm:px-6 lg:px-8;
+	@apply max-w-325 mx-auto px-3 sm:px-6 lg:px-8;
 }
 
 /* @theme inline {
