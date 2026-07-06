@@ -45,6 +45,7 @@ export default function Hero() {
 						src="/images/vector-2.png"
 						height={500}
 						width={500}
+						loading="eager"
 						className="h-full w-full object-contain"
 					/>
 				</div>
