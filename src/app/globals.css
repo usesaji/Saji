@@ -91,6 +91,10 @@
 	--color-warning-50: #fff9e6;
 }
 
+body {
+	@apply text-neutral bg-white;
+}
+
 .custom-container {
 	@apply max-w-325 mx-auto px-3 sm:px-6 lg:px-8;
 }

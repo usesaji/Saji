@@ -1,4 +1,5 @@
 import About from "../../components/landing/About";
+import Faq from "../../components/landing/Faq";
 import Header from "../../components/landing/Header";
 import Hero from "../../components/landing/Hero";
 
@@ -8,6 +9,7 @@ export default function Home() {
 			<Header />
 			<Hero />
 			<About />
+			<Faq />
 		</div>
 	);
 }
