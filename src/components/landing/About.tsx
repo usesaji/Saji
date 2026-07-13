@@ -67,7 +67,7 @@ const About = () => {
 					<div className="sm:w-1/2">
 						<Image
 							alt="Build your circle"
-							src="/images/about/build-circle.png"
+							src="/images/about/build-circle.svg"
 							height={500}
 							width={500}
 							className="object-contain h-full w-full"
@@ -97,7 +97,7 @@ const About = () => {
 						<div className="max-sm:mx-auto max-sm:-mb-6 max-sm:justify-self-centers lg:absolute right-0 -bottom-1 lg:right-[-50%] h-60 lg:h-50 xl:h-63.5">
 							<Image
 								alt="Withdraw in minutes"
-								src="/images/about/withdraw.png"
+								src="/images/about/withdraw.svg"
 								height={500}
 								width={500}
 								className="object-contain h-full w-full"
@@ -126,7 +126,7 @@ const About = () => {
 						<div className="max-sm:mx-auto max-sm:-mb-6 max-sm:justify-self-centers lg:absolute right-0 -bottom-10 lg:right-[-10%] h-60 lg:h-50 xl:h-63.5">
 							<Image
 								alt="Backed By Blockchain"
-								src="/images/about/backed.png"
+								src="/images/about/backed.svg"
 								height={500}
 								width={500}
 								className="object-contain h-full w-full"
@@ -154,7 +154,7 @@ const About = () => {
 					<div className=" sm:w-1/2 md:absolute md:right-[-5%] lg:bottom-[-40%]">
 						<Image
 							alt="Save the african style"
-							src="/images/about/native-drum.png"
+							src="/images/about/native-drum.svg"
 							height={500}
 							width={500}
 							className="object-contain h-full w-full"

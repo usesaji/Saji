@@ -10,9 +10,9 @@ export default function Hero() {
 					<div className="h-11 flex items-center gap-5">
 						<Image
 							alt="Hero Image"
-							src="/images/hero-user-imgs.png"
-							height={200}
-							width={200}
+							src="/images/hero-user-imgs.svg"
+							height={1200}
+							width={1200}
 							className="h-full w-full object-contain"
 						/>
 						<span className="whitespace-nowrap text-base md:text-xlx">
@@ -30,10 +30,11 @@ export default function Hero() {
 						Get Started
 					</Button>
 				</div>
-				<div className="z-10 max-md:w-full w-1/2 place-self-end">
+				<div className="z-10 max-md:w-full w1/2 place-self-end">
 					<Image
 						alt="Hero Image"
-						src="/images/hero-bg.png"
+						src="/images/hero-bg.svg"
+						loading="eager"
 						height={1000}
 						width={1000}
 						className="h-full w-full object-contain"
@@ -52,7 +53,7 @@ export default function Hero() {
 				<div className="absolute z-0 -top-16 -right-16 scale-80 max-lg:hidden">
 					<Image
 						alt="Hero Image"
-						src="/images/vector-2.png"
+						src="/images/vector-2.svg"
 						height={500}
 						width={500}
 						className="h-full w-full object-contain"
@@ -61,7 +62,7 @@ export default function Hero() {
 				<div className="absolute z-0 -bottom-10 -left-10 ">
 					<Image
 						alt="Hero Image"
-						src="/images/vector-1.png"
+						src="/images/vector-1.svg"
 						height={500}
 						width={500}
 						className="h-full w-full object-contain"

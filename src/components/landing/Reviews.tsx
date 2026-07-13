@@ -129,7 +129,7 @@ const Reviews = () => {
 					<div className="mt-3.5 w-40">
 						<Image
 							alt="images of users"
-							src="/images/review-user-imgs.png"
+							src="/images/hero-user-imgs.svg"
 							className="w-full object-contain"
 							height={100}
 							width={100}
