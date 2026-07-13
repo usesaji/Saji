@@ -11,7 +11,7 @@ const Footer = () => {
 		<footer className="pt-18.5 sm:pt-30">
 			<div className="custom-container">
 				<div className="grid grid-cols-2 sm:grid-cols-4 max-sm:gap-10 ">
-					<div className="place-self-center">
+					<div className="place-self-center h-full">
 						<Logo />
 						<div className="text-xl text-primary-dark-active flex gap-3 mt-5">
 							<Link href="#">
@@ -47,7 +47,7 @@ const Footer = () => {
 						<Link href="#">Cookie Policy</Link>
 					</div>
 				</div>
-				<div className="border-t-[#b3b3b3] border-t-[0.5px] mt-10 pb-5">
+				<div className="border-t-[#b3b3b3] border-t-[0.5px] mt-10 pb-5 md:mt-37">
 					<p className="mt-6 text-center">&copy; 2026 - usesajiapp</p>
 				</div>
 			</div>
