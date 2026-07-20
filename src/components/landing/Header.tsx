@@ -4,6 +4,7 @@ import Logo from "../shared/Logo";
 import { LuMenu } from "react-icons/lu";
 import { useState } from "react";
 import { IoMdClose } from "react-icons/io";
+import { pageRoutes } from "@/config/routes";
 
 const Header = () => {
 	const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -26,12 +27,18 @@ const Header = () => {
 					</ul>
 				</div>
 				<div className="flex gap-2.5 max-md:hidden">
-					<Button variant="secondary">Log In</Button>
-					<Button variant="default">Get Started</Button>
+					<Button variant="secondary" href={pageRoutes.login}>
+						Log In
+					</Button>
+					<Button variant="default" href={pageRoutes.register}>
+						Get Started
+					</Button>
 				</div>
 
 				<div className="flex gap-2.5 items-center md:hidden">
-					<Button variant="default">Get Started</Button>
+					<Button variant="default" href={pageRoutes.register}>
+						Get Started
+					</Button>
 					<div>
 						<LuMenu
 							className="text-3xl cursor-pointer"
@@ -145,7 +152,11 @@ const Header = () => {
 								</a>
 							</li>
 						</ul>
-						<Button variant="secondary" className="relative w-full">
+						<Button
+							variant="secondary"
+							href={pageRoutes.login}
+							className="relative w-full"
+						>
 							Log In
 						</Button>
 					</div>
