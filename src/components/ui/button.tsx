@@ -1,13 +1,15 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "../../lib/utils";
+import { FiLoader } from "react-icons/fi";
 
 const buttonVariants = cva(
 	"inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[40px] lg:rounded-[66px] text-sm sm:text-base lg:text-lg transition-all disabled:pointer-events-none disabled:bg-primary-400 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-none focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive cursor-pointer duration-150 hover:scale-[1.05] active:scale-[0.98]",
 	{
 		variants: {
 			variant: {
-				default: "bg-primary text-white hover:bg-primary-hover",
+				default:
+					"bg-primary text-white hover:bg-primary-hover disabled:bg-[#DCDDDE] disabled:text-[#B7B9BB]",
 				destructive:
 					"bg-error-500 text-white hover:bg-error-500/80 focus-visible:ring-destructive/20",
 				outline: "border border-primary-500",
@@ -93,7 +95,9 @@ function Button(props: ButtonProps) {
 			>
 				{isLoading ? (
 					<span className="flex items-center gap-2">
-						<span className="opacity-80 animate-pulse">loading...</span>
+						<span className="opacity-80 animate-pulse">
+							<FiLoader size={36} />
+						</span>
 					</span>
 				) : (
 					children
@@ -114,7 +118,9 @@ function Button(props: ButtonProps) {
 		>
 			{isLoading ? (
 				<span className="flex items-center gap-2">
-					<span className="opacity-80 animate-pulse">loading...</span>
+					<span className="animate-spin">
+						<FiLoader size={36} />
+					</span>
 				</span>
 			) : (
 				children

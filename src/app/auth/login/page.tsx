@@ -90,7 +90,10 @@ export default function LoginPage() {
 
 				<p className="text-center text-neutral-500 mt-6">
 					New to Saji?{" "}
-					<a href={pageRoutes.register} className="text-primary font-medium">
+					<a
+						href={pageRoutes.authRoutes.LOGIN}
+						className="text-primary font-medium"
+					>
 						Create an account
 					</a>
 				</p>

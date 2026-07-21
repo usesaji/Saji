@@ -1,5 +1,9 @@
 export const pageRoutes = {
 	landingPage: "/",
-	login: "/auth/login",
-	register: "/auth/register",
+
+	authRoutes: {
+		LOGIN: "/auth/login",
+		REGISTER: "/auth/register",
+		OTP: "/auth/register/verify-otp",
+	},
 };

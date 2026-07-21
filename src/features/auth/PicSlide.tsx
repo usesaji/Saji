@@ -35,7 +35,7 @@ const PicSlide = () => {
 	return (
 		// <div className="relative h-full min-h-125 overflow-hidden">
 		// <div className="relative h-105 overflow-hidden">
-		<div className="relative h-87.5 sm:h-105 lg:h-130 overflow-hidden">
+		<div className="relative h-70 sm:h-105 lg:h-130 overflow-hidden">
 			{details.map((slide, index) => (
 				<div
 					key={index}
@@ -43,15 +43,16 @@ const PicSlide = () => {
 						current === index ? "opacity-100" : "opacity-0 pointer-events-none"
 					}`}
 				>
-					<div className="mb-8 font-light text-black">
-						<h2 className="text-[28px]">{slide.title}</h2>
-						<p className="text-sm">{slide.text}</p>
+					<div className="mb-8 font-light text-black md:text-center lg:order-2 lg:mt-5">
+						<h2 className="text-[28px] lg:text-[36px]">{slide.title}</h2>
+						<p className="text-sm lg:text-base">{slide.text}</p>
 					</div>
 
 					<div className="relative flex-1">
 						<Image
 							src={slide.img}
 							alt={slide.title}
+							loading="eager"
 							fill
 							className="object-contain"
 						/>

@@ -27,16 +27,16 @@ const Header = () => {
 					</ul>
 				</div>
 				<div className="flex gap-2.5 max-md:hidden">
-					<Button variant="secondary" href={pageRoutes.login}>
+					<Button variant="secondary" href={pageRoutes.authRoutes.LOGIN}>
 						Log In
 					</Button>
-					<Button variant="default" href={pageRoutes.register}>
+					<Button variant="default" href={pageRoutes.authRoutes.REGISTER}>
 						Get Started
 					</Button>
 				</div>
 
 				<div className="flex gap-2.5 items-center md:hidden">
-					<Button variant="default" href={pageRoutes.register}>
+					<Button variant="default" href={pageRoutes.authRoutes.REGISTER}>
 						Get Started
 					</Button>
 					<div>
@@ -154,7 +154,7 @@ const Header = () => {
 						</ul>
 						<Button
 							variant="secondary"
-							href={pageRoutes.login}
+							href={pageRoutes.authRoutes.LOGIN}
 							className="relative w-full"
 						>
 							Log In

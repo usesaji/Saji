@@ -90,6 +90,9 @@
 	--color-warning-100: #fff3cd;
 	--color-warning-50: #fff9e6;
 }
+html {
+	@apply font-sans overflow-x-hidden;
+}
 
 body {
 	@apply text-neutral bg-white;

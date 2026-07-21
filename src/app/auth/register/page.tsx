@@ -1,17 +1,22 @@
 "use client";
 
 import React from "react";
-import PicSlide from "../../../components/auth/PicSlide";
+import PicSlide from "../../../features/auth/PicSlide";
+import RegisterForm from "../../../features/auth/RegisterForm";
+import Toast from "../../../components/ui/custom/Toast";
 
 export default function Page() {
 	return (
-		<div className="pt-20 sm:pt-32">
-			<div className="custom-container flex flex-col">
-				<div>
+		<div className="pt-20 sm:pt-32 lg:pt-40">
+			<div className="custom-container flex flex-col gap-10 lg:flex-row lg:items-center lg:gap-20">
+				<div className="lg:flex-1">
 					<PicSlide />
 				</div>
-				<div>form</div>
+				<div className="max-w-lg w-full mx-auto lg:flex-1">
+					<RegisterForm />
+				</div>
 			</div>
+			<Toast />
 		</div>
 	);
 }

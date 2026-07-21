@@ -7,7 +7,7 @@ export default function RootLayout({
 	children: React.ReactNode;
 }>) {
 	return (
-		<div>
+		<div className="pb-10">
 			<div className="max-:hidden">
 				<Header />
 			</div>
