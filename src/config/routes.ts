@@ -1,5 +1,5 @@
 export const pageRoutes = {
 	landingPage: "/",
-	login: "/login",
-	register: "/register",
+	login: "/auth/login",
+	register: "/auth/register",
 };

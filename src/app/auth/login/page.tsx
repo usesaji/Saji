@@ -7,14 +7,9 @@ import Logo from "@/components/shared/Logo";
 import { pageRoutes } from "@/config/routes";
 import { ApiError, auth, setToken } from "@/lib/api";
 
-export default function RegisterPage() {
+export default function LoginPage() {
 	const router = useRouter();
-	const [form, setForm] = useState({
-		name: "",
-		email: "",
-		password: "",
-		password_confirmation: "",
-	});
+	const [form, setForm] = useState({ email: "", password: "" });
 	const [errors, setErrors] = useState<Record<string, string[]>>({});
 	const [formError, setFormError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
@@ -30,7 +25,7 @@ export default function RegisterPage() {
 		setErrors({});
 		setFormError(null);
 		try {
-			const { token } = await auth.register(form);
+			const { token } = await auth.login(form);
 			setToken(token);
 			router.push(pageRoutes.landingPage);
 		} catch (err) {
@@ -53,10 +48,10 @@ export default function RegisterPage() {
 				</div>
 
 				<h1 className="text-3xl lg:text-4xl font-semibold text-center mb-2">
-					Create your account
+					Welcome back
 				</h1>
 				<p className="text-center text-neutral-500 mb-8">
-					Start saving the West African way.
+					Log in to your Saji account.
 				</p>
 
 				{formError && (
@@ -66,14 +61,6 @@ export default function RegisterPage() {
 				)}
 
 				<form onSubmit={onSubmit} className="flex flex-col gap-4">
-					<Field
-						label="Full name"
-						type="text"
-						value={form.name}
-						onChange={update("name")}
-						error={errors.name?.[0]}
-						autoComplete="name"
-					/>
 					<Field
 						label="Email"
 						type="email"
@@ -88,14 +75,7 @@ export default function RegisterPage() {
 						value={form.password}
 						onChange={update("password")}
 						error={errors.password?.[0]}
-						autoComplete="new-password"
-					/>
-					<Field
-						label="Confirm password"
-						type="password"
-						value={form.password_confirmation}
-						onChange={update("password_confirmation")}
-						autoComplete="new-password"
+						autoComplete="current-password"
 					/>
 
 					<Button
@@ -104,14 +84,14 @@ export default function RegisterPage() {
 						isLoading={loading}
 						className="w-full mt-2"
 					>
-						Get Started
+						Log In
 					</Button>
 				</form>
 
 				<p className="text-center text-neutral-500 mt-6">
-					Already have an account?{" "}
-					<a href={pageRoutes.login} className="text-primary font-medium">
-						Log in
+					New to Saji?{" "}
+					<a href={pageRoutes.register} className="text-primary font-medium">
+						Create an account
 					</a>
 				</p>
 			</div>
@@ -133,7 +113,7 @@ function Field({
 			<input
 				{...props}
 				required
-				className="h-[52px] rounded-2xl border border-neutral-200 px-4 outline-none focus:border-primary transition-colors"
+				className="h-13 rounded-2xl border border-neutral-200 px-4 outline-none focus:border-primary transition-colors"
 			/>
 			{error && <span className="text-xs text-error-500">{error}</span>}
 		</label>
