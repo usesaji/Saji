@@ -1,3 +1,5 @@
+"use client";
+
 import { Button } from "../../../components/ui/button";
 import InputField from "../../../components/ui/custom/InputField";
 import {
@@ -13,8 +15,10 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { pageRoutes } from "../../../config/routes";
 import { toast } from "../../../lib/utils/toast";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ApiError, auth, fieldErrors, setToken } from "../../../lib/api";
+import { signupSession } from "../../../lib/auth/signup-session";
 
 type CreateProfileValues = z.infer<typeof CreateProfileSchema>;
 
@@ -38,15 +42,69 @@ export default function CreateProfileForm() {
 		formState: { isValid, isSubmitting },
 	} = form;
 
-	const onSubmit = (values: CreateProfileValues) => {
-		console.log(values);
+	// Reaching this page without a verified email means the OTP step was skipped
+	// or the token expired; send them back rather than failing on submit.
+	useEffect(() => {
+		if (!signupSession.getToken()) {
+			toast.error("Verify your email first.", "Verification Required");
+			router.replace(pageRoutes.authRoutes.REGISTER);
+		}
+	}, [router]);
+
+	const onSubmit = async (values: CreateProfileValues) => {
+		const signupToken = signupSession.getToken();
+
+		if (!signupToken) {
+			toast.error("Verify your email first.", "Verification Required");
+			router.replace(pageRoutes.authRoutes.REGISTER);
+			return;
+		}
+
 		setIsLoading(true);
 
-		setTimeout(() => {
+		try {
+			const { token } = await auth.completeProfile({
+				signup_token: signupToken,
+				name: values.full_name,
+				tag_name: values.tag_name,
+				password: values.password,
+				password_confirmation: values.confirmPassword,
+			});
+
+			// Account created — log in and drop the signup scratch state.
+			setToken(token);
+			signupSession.clear();
+
 			toast.success("", "Profile Created");
-			setIsLoading(false);
 			router.push(pageRoutes.dashboardRoutes.OVERVIEW);
-		}, 2000);
+		} catch (err) {
+			const fields = fieldErrors(err);
+
+			if (fields.tag_name) {
+				form.setError("tag_name", { message: fields.tag_name });
+			}
+			if (fields.name) {
+				form.setError("full_name", { message: fields.name });
+			}
+			if (fields.password) {
+				form.setError("password", { message: fields.password });
+			}
+
+			// An expired signup token can only be fixed by verifying again.
+			if (fields.signup_token) {
+				signupSession.clear();
+				toast.error(fields.signup_token, "Verification Expired");
+				router.replace(pageRoutes.authRoutes.REGISTER);
+				return;
+			}
+
+			toast.error(
+				err instanceof ApiError ? err.message : "Something went wrong.",
+				"Could not create profile",
+			);
+		} finally {
+			setIsLoading(false);
+		}
 	};
 
 	return (

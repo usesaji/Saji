@@ -1,3 +1,5 @@
+"use client";
+
 import { Button } from "../../../components/ui/button";
 import InputField from "../../../components/ui/custom/InputField";
 import {
@@ -17,6 +19,7 @@ import { pageRoutes } from "../../../config/routes";
 import { toast } from "../../../lib/utils/toast";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ApiError, auth, fieldErrors, setToken } from "../../../lib/api";
 
 type SignInValues = z.infer<typeof SignInSchema>;
 
@@ -38,15 +41,35 @@ export default function LoginForm() {
 		formState: { isValid, isSubmitting },
 	} = form;
 
-	const onSubmit = (values: SignInValues) => {
-		console.log(values);
+	const onSubmit = async (values: SignInValues) => {
 		setIsLoading(true);
 
-		setTimeout(() => {
+		try {
+			const { token } = await auth.login({
+				email: values.email,
+				password: values.password,
+			});
+
+			setToken(token);
 			toast.success("", "Login Successful");
+			router.push(pageRoutes.dashboardRoutes.OVERVIEW);
+		} catch (err) {
+			// Laravel returns the credential failure keyed on `email`; surface it
+			// on the field so the user sees it in context, not just as a toast.
+			const fields = fieldErrors(err);
+			for (const [name, message] of Object.entries(fields)) {
+				if (name === "email" || name === "password") {
+					form.setError(name, { message });
+				}
+			}
+
+			toast.error(
+				err instanceof ApiError ? err.message : "Something went wrong.",
+				"Login Failed",
+			);
+		} finally {
 			setIsLoading(false);
-			router.push('/');
-		}, 2000);
+		}
 	};
 
 	return (

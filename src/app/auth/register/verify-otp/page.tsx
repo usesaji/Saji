@@ -6,7 +6,6 @@ import VerifyOtpForm from "../../../../features/auth/components/VerifyOTPForm";
 export default function VerifyOtpPage() {
 	const params = useSearchParams();
 	const email = params.get("email");
-	console.log(email);
 
 	return (
 		<div className="max-w-md mx-auto  min-h-screen flex flex-col items-center justify-center">
@@ -20,13 +19,6 @@ export default function VerifyOtpPage() {
 			</div>
 
 			<VerifyOtpForm />
-
-			<p className="mt-8 text-center text-sm">
-				Didn&apos;t receive the code?{" "}
-				<button type="button" className="font-medium underline">
-					Resend OTP
-				</button>
-			</p>
 		</div>
 	);
 }

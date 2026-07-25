@@ -45,6 +45,17 @@ return [
         'network' => env('STELLAR_NETWORK', 'testnet'),
         'rpc_url' => env('STELLAR_RPC_URL', 'https://soroban-testnet.stellar.org'),
         'contract_id' => env('STELLAR_CONTRACT_ID'),
+        // Path to the `stellar` CLI used to assemble/simulate invocations.
+        'cli' => env('STELLAR_CLI', 'stellar'),
+        // The backend scheduler's own key, used ONLY for trigger_payout (which
+        // needs no user authority). Never a user's key. Leave unset to disable
+        // backend-initiated payouts.
+        'service_secret' => env('STELLAR_SERVICE_SECRET'),
+        // Default token: the USDC Stellar Asset Contract (SAC) address on the
+        // active network, used when a group doesn't specify its own asset.
+        'usdc_sac' => env('STELLAR_USDC_SAC'),
+        // Optional on-ramp link surfaced on the Wallet "Fund account" screen.
+        'onramp_url' => env('STELLAR_ONRAMP_URL'),
     ],
 
 ];

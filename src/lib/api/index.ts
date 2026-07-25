@@ -12,6 +12,7 @@ const TOKEN_KEY = "saji_token";
 export type User = {
 	id: number;
 	name: string;
+	tag_name: string | null;
 	email: string;
 	stellar_address: string | null;
 };
@@ -96,9 +97,53 @@ async function request<T>(
 	return data as T;
 }
 
+/** Field-level validation errors, flattened to one message per field. */
+export function fieldErrors(err: unknown): Record<string, string> {
+	if (!(err instanceof ApiError) || !err.errors) return {};
+	return Object.fromEntries(
+		Object.entries(err.errors).map(([key, messages]) => [key, messages[0]]),
+	);
+}
+
 // ---- auth endpoints ----
 
 export const auth = {
+	/** Step 1 of signup: mail a 4-digit code to the address. */
+	startRegistration(input: { email: string }): Promise<{
+		message: string;
+		expires_in_minutes: number;
+	}> {
+		return request("/api/auth/register/start", {
+			method: "POST",
+			body: input,
+		});
+	},
+
+	/** Step 2: exchange a correct code for a short-lived signup token. */
+	verifyOtp(input: { email: string; otp: string }): Promise<{
+		message: string;
+		signup_token: string;
+	}> {
+		return request("/api/auth/register/verify-otp", {
+			method: "POST",
+			body: input,
+		});
+	},
+
+	/** Step 3: exchange the signup token + profile for a real account. */
+	completeProfile(input: {
+		signup_token: string;
+		name: string;
+		tag_name: string;
+		password: string;
+		password_confirmation: string;
+	}): Promise<AuthResponse> {
+		return request<AuthResponse>("/api/auth/register/complete-profile", {
+			method: "POST",
+			body: input,
+		});
+	},
+
 	register(input: {
 		name: string;
 		email: string;
