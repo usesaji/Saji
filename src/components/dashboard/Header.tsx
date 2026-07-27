@@ -9,8 +9,8 @@ import { CiSearch } from "react-icons/ci";
 
 export default function Header() {
 	return (
-		<header className="bg-white max-lg:fixed max-lg:inset-x-0 max-lg:top-0">
-			<div className="flex justify-between items-center py-4 md:py-6 dashboard-custom-container gap-10">
+		<header className="bg-white max-lg:fixed max-lg:inset-x-0 max-lg:top-0 z-1001">
+			<div className="flex justify-between items-center py-4 md:py-6 lg:py-10 dashboard-custom-container gap-10">
 				{/* <div>
 					<Logo />
 				</div> */}

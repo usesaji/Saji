@@ -90,19 +90,22 @@
 	--color-warning-100: #fff3cd;
 	--color-warning-50: #fff9e6;
 }
+
 html {
-	@apply font-sans overflow-x-hidden;
+	@apply font-sans overflow-x-hidden scrollbar-gutter-stable;
+	scrollbar-gutter: stable;
 }
+/* globals.css */
 
 body {
-	@apply text-neutral bg-white;
+	@apply text-neutral bg-white overflow-x-hidden;
 }
 
 .custom-container {
 	@apply max-w-325 mx-auto px-3 sm:px-6 lg:px-8;
 }
 .dashboard-custom-container {
-	@apply max-w-400 mx-auto px-3 sm:px-6 lg:px-8;
+	@apply max-w-350 mx-auto px-3 sm:px-6 lg:px-8;
 }
 
 .landing-h2 {
