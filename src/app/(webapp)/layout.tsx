@@ -14,7 +14,7 @@ export default function Layout({
 			</div>
 			<div className="lg:flex-9/12">
 				<Header />
-				<div className="pt-22 md:pt-26 lg:pt-5 lg:max-h-screen overflow-y-auto hide-scroll bg-white dashboard-custom-container">
+				<div className="pt-24 md:pt-26 lg:pt-5 lg:max-h-screen overflow-y-auto hide-scroll bg-white dashboard-custom-container">
 					<div className="min-h-screen pb-36 lg:pb-60">{children}</div>
 				</div>
 			</div>

@@ -12,7 +12,7 @@ const MyCircleCard = () => {
 						<Image
 							alt="Group Image"
 							src="/images/about/backed.svg"
-							height={300}
+							height={300}    
 							width={300}
 							className="h-full w-full object-cover"
 						/>
