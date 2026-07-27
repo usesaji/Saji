@@ -52,10 +52,35 @@ class AuthController extends Controller
 
         $user = User::where('email', $data['email'])->first();
 
+        // Account lockout (Password & Security setting). While locked, reject
+        // even a correct password until the window passes.
+        if ($user && $user->locked_until && $user->locked_until->isFuture()) {
+            throw ValidationException::withMessages([
+                'email' => ['This account is temporarily locked. Try again later.'],
+            ]);
+        }
+
         if (! $user || ! $user->password || ! Hash::check($data['password'], $user->password)) {
+            // Count the failure and lock the account once the user's configured
+            // threshold is reached (0 disables the lockout).
+            if ($user && $user->lock_after_failed_attempts > 0) {
+                $attempts = $user->failed_login_attempts + 1;
+                $lock = $attempts >= $user->lock_after_failed_attempts;
+
+                $user->forceFill([
+                    'failed_login_attempts' => $lock ? 0 : $attempts,
+                    'locked_until' => $lock ? now()->addMinutes(15) : $user->locked_until,
+                ])->save();
+            }
+
             throw ValidationException::withMessages([
                 'email' => ['The provided credentials are incorrect.'],
             ]);
+        }
+
+        // Successful login clears the failure counter.
+        if ($user->failed_login_attempts > 0 || $user->locked_until) {
+            $user->forceFill(['failed_login_attempts' => 0, 'locked_until' => null])->save();
         }
 
         $token = $user->createToken('api')->plainTextToken;

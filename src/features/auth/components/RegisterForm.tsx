@@ -1,3 +1,5 @@
+"use client";
+
 import { Button } from "../../../components/ui/button";
 import InputField from "../../../components/ui/custom/InputField";
 import {
@@ -17,6 +19,8 @@ import { pageRoutes } from "../../../config/routes";
 import { toast } from "../../../lib/utils/toast";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ApiError, auth, fieldErrors } from "../../../lib/api";
+import { signupSession } from "../../../lib/auth/signup-session";
 
 type SignUpValues = z.infer<typeof SignUpSchema>;
 
@@ -37,15 +41,28 @@ export default function RegisterForm() {
 		formState: { isValid, isSubmitting },
 	} = form;
 
-	const onSubmit = (values: SignUpValues) => {
-		console.log(values);
+	const onSubmit = async (values: SignUpValues) => {
 		setIsLoading(true);
 
-		setTimeout(() => {
+		try {
+			await auth.startRegistration({ email: values.email });
+
+			// The OTP step needs the address to verify against.
+			signupSession.setEmail(values.email);
+
 			toast.success("Check your email to verify OTP", "OTP Sent");
-			setIsLoading(false);
 			router.push(pageRoutes.authRoutes.OTP(values.email));
-		}, 2000);
+		} catch (err) {
+			const emailError = fieldErrors(err).email;
+			if (emailError) form.setError("email", { message: emailError });
+
+			toast.error(
+				err instanceof ApiError ? err.message : "Something went wrong.",
+				"Could not send code",
+			);
+		} finally {
+			setIsLoading(false);
+		}
 	};
 
 	return (

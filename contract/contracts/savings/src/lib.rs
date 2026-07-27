@@ -25,6 +25,19 @@ pub enum Status {
     Completed = 3,
 }
 
+/// How the payout rotation order is decided. The contract always pays the
+/// member at `Cycle`'s index in the `Members` vec; this field records the
+/// policy the organizer chose off-chain so it is auditable on-chain and so a
+/// future upgrade can enforce ordering (e.g. a verifiable random shuffle).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum PayoutOrder {
+    Manual = 0,
+    Random = 1,
+    Vote = 2,
+    Custom = 3,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub struct GroupConfig {
@@ -33,6 +46,14 @@ pub struct GroupConfig {
     pub amount: i128,
     pub cycle_length: u64,
     pub fee_bps: u32,
+    /// Penalty a late payer owes, in bps of `amount`. Stored for the documented
+    /// default-handling hook (SPEC §7); not yet charged in the strict MVP.
+    pub late_fee_bps: u32,
+    /// Seconds after a contribution's due time a member may still pay before
+    /// counting as a default. Stored for the same future hook.
+    pub grace_period: u64,
+    /// Rotation-order policy chosen at creation (see `PayoutOrder`).
+    pub payout_order: PayoutOrder,
     pub member_count: u32,
     pub status: Status,
 }
@@ -58,6 +79,9 @@ pub enum DataKey {
 #[repr(u32)]
 pub enum Error {
     GroupNotFound = 1,
+    /// Reserved: organizer-gated actions revert via `require_auth()` today, but
+    /// this typed variant is kept stable in the ABI for the future
+    /// `resolve_default` hook (SPEC §7), which will check it explicitly.
     NotOrganizer = 2,
     InvalidFee = 3,
     InvalidAmount = 4,
@@ -67,9 +91,19 @@ pub enum Error {
     AlreadyContributed = 8,
     NotAllContributed = 9,
     TooFewMembers = 10,
+    InvalidCycleLength = 11,
 }
 
 const BPS_DENOMINATOR: i128 = 10_000;
+
+// Persistent-storage lifetime. Soroban archives persistent entries once their
+// TTL lapses; an archived group would be unspendable. A savings circle can run
+// for many cycles across weeks/months, so we extend the TTL of a group's live
+// keys on every state change. ~30 days low-watermark, bumped to ~90 days.
+// (1 ledger ≈ 5s ⇒ 17_280 ledgers/day.)
+const LEDGERS_PER_DAY: u32 = 17_280;
+const TTL_THRESHOLD: u32 = 30 * LEDGERS_PER_DAY;
+const TTL_EXTEND_TO: u32 = 90 * LEDGERS_PER_DAY;
 
 // ----------------------------------------------------------------------------
 // Contract
@@ -89,13 +123,19 @@ impl SavingsContract {
         amount: i128,
         cycle_length: u64,
         fee_bps: u32,
+        late_fee_bps: u32,
+        grace_period: u64,
+        payout_order: PayoutOrder,
     ) -> Result<u64, Error> {
         organizer.require_auth();
 
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        if fee_bps > BPS_DENOMINATOR as u32 {
+        if cycle_length == 0 {
+            return Err(Error::InvalidCycleLength);
+        }
+        if fee_bps > BPS_DENOMINATOR as u32 || late_fee_bps > BPS_DENOMINATOR as u32 {
             return Err(Error::InvalidFee);
         }
 
@@ -111,6 +151,9 @@ impl SavingsContract {
             amount,
             cycle_length,
             fee_bps,
+            late_fee_bps,
+            grace_period,
+            payout_order,
             member_count: 1,
             status: Status::Draft,
         };
@@ -129,6 +172,7 @@ impl SavingsContract {
             (organizer, amount),
         );
 
+        Self::bump_ttl(&env, group_id);
         Ok(group_id)
     }
 
@@ -162,6 +206,7 @@ impl SavingsContract {
         env.events()
             .publish((symbol_short!("joined"), group_id), member);
 
+        Self::bump_ttl(&env, group_id);
         Ok(())
     }
 
@@ -189,6 +234,7 @@ impl SavingsContract {
             config.member_count,
         );
 
+        Self::bump_ttl(&env, group_id);
         Ok(())
     }
 
@@ -236,6 +282,7 @@ impl SavingsContract {
             (cycle, config.amount),
         );
 
+        Self::bump_ttl(&env, group_id);
         Ok(())
     }
 
@@ -299,6 +346,7 @@ impl SavingsContract {
             storage.set(&DataKey::Cycle(group_id), &next_cycle);
         }
 
+        Self::bump_ttl(&env, group_id);
         Ok(())
     }
 
@@ -353,6 +401,24 @@ impl SavingsContract {
             .persistent()
             .get(&DataKey::Config(group_id))
             .ok_or(Error::GroupNotFound)
+    }
+
+    /// Keep a group's core keys alive. Called on every state change so an
+    /// actively-used circle is never archived out from under its funds. The
+    /// per-(cycle, member) `Contributed` keys are short-lived by nature and are
+    /// left to their default TTL.
+    fn bump_ttl(env: &Env, group_id: u64) {
+        let storage = env.storage().persistent();
+        for key in [
+            DataKey::Config(group_id),
+            DataKey::Members(group_id),
+            DataKey::Pool(group_id),
+            DataKey::Cycle(group_id),
+        ] {
+            if storage.has(&key) {
+                storage.extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+            }
+        }
     }
 }
 

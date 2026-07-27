@@ -75,6 +75,15 @@
                 },
                 {
                   "u32": 0
+                },
+                {
+                  "u32": 0
+                },
+                {
+                  "u64": 0
+                },
+                {
+                  "u32": 0
                 }
               ]
             }
@@ -197,6 +206,15 @@
                 },
                 {
                   "u64": 604800
+                },
+                {
+                  "u32": 0
+                },
+                {
+                  "u32": 0
+                },
+                {
+                  "u64": 0
                 },
                 {
                   "u32": 0
@@ -509,6 +527,22 @@
                     },
                     {
                       "key": {
+                        "symbol": "grace_period"
+                      },
+                      "val": {
+                        "u64": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "late_fee_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "member_count"
                       },
                       "val": {
@@ -521,6 +555,14 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "payout_order"
+                      },
+                      "val": {
+                        "u32": 0
                       }
                     },
                     {
@@ -545,7 +587,7 @@
             },
             "ext": "v0"
           },
-          4095
+          1555200
         ]
       ],
       [
@@ -614,6 +656,22 @@
                     },
                     {
                       "key": {
+                        "symbol": "grace_period"
+                      },
+                      "val": {
+                        "u64": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "late_fee_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "member_count"
                       },
                       "val": {
@@ -626,6 +684,14 @@
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "payout_order"
+                      },
+                      "val": {
+                        "u32": 0
                       }
                     },
                     {
@@ -650,7 +716,7 @@
             },
             "ext": "v0"
           },
-          4095
+          1555200
         ]
       ],
       [
@@ -809,7 +875,7 @@
             },
             "ext": "v0"
           },
-          4095
+          1555200
         ]
       ],
       [
@@ -854,7 +920,7 @@
             },
             "ext": "v0"
           },
-          4095
+          1555200
         ]
       ],
       [
@@ -945,7 +1011,7 @@
             },
             "ext": "v0"
           },
-          4095
+          1555200
         ]
       ],
       [
@@ -997,7 +1063,7 @@
             },
             "ext": "v0"
           },
-          4095
+          1555200
         ]
       ],
       [
@@ -1045,7 +1111,7 @@
             },
             "ext": "v0"
           },
-          4095
+          1555200
         ]
       ],
       [
@@ -1093,7 +1159,7 @@
             },
             "ext": "v0"
           },
-          4095
+          1555200
         ]
       ],
       [

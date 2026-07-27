@@ -4,11 +4,14 @@ namespace App\Http\Controllers;
 
 use App\Models\Contribution;
 use App\Models\Group;
+use App\Services\Stellar\StellarService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class ContributionController extends Controller
 {
+    public function __construct(private readonly StellarService $stellar) {}
+
     /** Contributions the authenticated user has made to a group. */
     public function index(Request $request, Group $group): JsonResponse
     {
@@ -50,8 +53,23 @@ class ContributionController extends Controller
             ]
         );
 
-        // TODO(M2): StellarService::contribute() -> submit tx, store hash.
+        // Non-custodial: the MEMBER's connected wallet signs the on-chain
+        // contribute. Build the unsigned tx for the frontend to sign; it then
+        // posts the signed XDR back to POST /groups/{group}/submit (type
+        // "contribution"), which broadcasts it. The indexer flips this row to
+        // 'confirmed' when the `contributed` event lands. Requires the member to
+        // have linked a wallet and the group to be live on-chain.
+        $unsignedXdr = null;
+        if ($user->stellar_address && $group->onchain_group_id !== null) {
+            $unsignedXdr = $this->stellar->buildContributeTx(
+                member: $user->stellar_address,
+                groupId: $group->onchain_group_id,
+            );
+        }
 
-        return response()->json($contribution, $contribution->wasRecentlyCreated ? 201 : 200);
+        return response()->json([
+            'contribution' => $contribution,
+            'unsigned_xdr' => $unsignedXdr,
+        ], $contribution->wasRecentlyCreated ? 201 : 200);
     }
 }

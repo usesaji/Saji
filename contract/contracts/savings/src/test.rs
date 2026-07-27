@@ -46,7 +46,10 @@ impl Setup {
 /// given fee. Returns (group_id, organizer, members).
 fn active_group(s: &Setup, n: u32, amount: i128, fee_bps: u32) -> (u64, Address, soroban_sdk::Vec<Address>) {
     let organizer = s.funded_member(amount * 10);
-    let group_id = s.client.create_group(&organizer, &s.token, &amount, &604_800, &fee_bps);
+    let group_id = s.client.create_group(
+        &organizer, &s.token, &amount, &604_800, &fee_bps,
+        &0u32, &0u64, &PayoutOrder::Manual,
+    );
 
     let mut members = soroban_sdk::Vec::new(&s.env);
     members.push_back(organizer.clone());
@@ -158,7 +161,10 @@ fn start_cycle_requires_two_members() {
     let s = setup();
     let amount = 10_000_000i128;
     let organizer = s.funded_member(amount);
-    let group_id = s.client.create_group(&organizer, &s.token, &amount, &604_800, &0);
+    let group_id = s.client.create_group(
+        &organizer, &s.token, &amount, &604_800, &0,
+        &0u32, &0u64, &PayoutOrder::Manual,
+    );
     // Only one member -> revert (TooFewMembers).
     s.client.start_cycle(&group_id);
 }
@@ -190,6 +196,64 @@ fn two_groups_pools_never_cross() {
 }
 
 // ---- Fee edges ----
+
+// ---- New rule fields (late fee / grace / payout order) ----
+
+#[test]
+fn create_group_stores_rule_fields() {
+    let s = setup();
+    let amount = 10_000_000i128;
+    let organizer = s.funded_member(amount);
+    let group_id = s.client.create_group(
+        &organizer, &s.token, &amount, &604_800, &50,
+        &200u32, &3_600u64, &PayoutOrder::Random,
+    );
+
+    let cfg = s.client.get_group(&group_id);
+    assert_eq!(cfg.late_fee_bps, 200);
+    assert_eq!(cfg.grace_period, 3_600);
+    assert_eq!(cfg.payout_order, PayoutOrder::Random);
+    assert_eq!(cfg.fee_bps, 50);
+}
+
+#[test]
+#[should_panic]
+fn create_group_rejects_late_fee_over_100_percent() {
+    let s = setup();
+    let amount = 10_000_000i128;
+    let organizer = s.funded_member(amount);
+    // late_fee_bps > 10000 must revert (InvalidFee).
+    s.client.create_group(
+        &organizer, &s.token, &amount, &604_800, &0,
+        &10_001u32, &0u64, &PayoutOrder::Manual,
+    );
+}
+
+#[test]
+#[should_panic]
+fn create_group_rejects_zero_cycle_length() {
+    let s = setup();
+    let amount = 10_000_000i128;
+    let organizer = s.funded_member(amount);
+    // cycle_length == 0 must revert (InvalidCycleLength).
+    s.client.create_group(
+        &organizer, &s.token, &amount, &0, &0,
+        &0u32, &0u64, &PayoutOrder::Manual,
+    );
+}
+
+#[test]
+fn create_group_rejects_zero_cycle_length_typed_error() {
+    let s = setup();
+    let amount = 10_000_000i128;
+    let organizer = s.funded_member(amount);
+    // The `try_` variant surfaces the typed error without panicking.
+    let res = s.client.try_create_group(
+        &organizer, &s.token, &amount, &0, &0,
+        &0u32, &0u64, &PayoutOrder::Manual,
+    );
+    assert_eq!(res, Err(Ok(Error::InvalidCycleLength)));
+}
 
 #[test]
 fn zero_fee_gives_whole_pool_to_recipient() {
