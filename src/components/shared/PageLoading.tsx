@@ -2,7 +2,7 @@
 
 export default function PageLoading() {
 	return (
-		<div className="flex items-center justify-center bg-white fixed inset-0 z-50">
+		<div className="flex items-center justify-center bg-white/20 backdrop-blur-[2px] fixed inset-0 z-50">
 			<svg
 				className="animate-spin scale-75 lg:scale-100"
 				width="110"
