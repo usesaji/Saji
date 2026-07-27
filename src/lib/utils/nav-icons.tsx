@@ -5,6 +5,7 @@ type IconProps = {
 export function HomeIcon({ active }: IconProps) {
 	return (
 		<svg
+			className="max-md:scale-[0.85]"
 			width="28"
 			height="31"
 			viewBox="0 0 28 31"
@@ -23,6 +24,7 @@ export function HomeIcon({ active }: IconProps) {
 export function GroupsIcon({ active }: IconProps) {
 	return (
 		<svg
+			className="max-md:scale-[0.85]"
 			width="27"
 			height="27"
 			viewBox="0 0 27 27"
@@ -39,6 +41,7 @@ export function GroupsIcon({ active }: IconProps) {
 export function ActivityIcon({ active }: IconProps) {
 	return (
 		<svg
+			className="max-md:scale-[0.85]"
 			width="27"
 			height="27"
 			viewBox="0 0 27 27"
@@ -55,6 +58,7 @@ export function ActivityIcon({ active }: IconProps) {
 export function WalletIcon({ active }: IconProps) {
 	return (
 		<svg
+			className="max-md:scale-[0.85]"
 			width="27"
 			height="27"
 			viewBox="0 0 27 27"
@@ -71,6 +75,7 @@ export function WalletIcon({ active }: IconProps) {
 export function MeIcon({ active }: IconProps) {
 	return (
 		<svg
+			className="max-md:scale-[0.85]"
 			width="21"
 			height="27"
 			viewBox="0 0 21 27"
