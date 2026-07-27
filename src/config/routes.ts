@@ -9,7 +9,7 @@ export const pageRoutes = {
 	},
 
 	dashboardRoutes: {
-		HOME: "/home",
+		OVERVIEW: "/overview",
 		GROUP: "/group",
 		ACTIVITY: "/activity",
 		WALLET: "/wallet",

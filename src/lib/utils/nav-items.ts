@@ -9,8 +9,8 @@ import { pageRoutes } from "../../config/routes";
 
 export const navItems = [
 	{
-		label: "Home",
-		href: pageRoutes.dashboardRoutes.HOME,
+		label: "Overview",
+		href: pageRoutes.dashboardRoutes.OVERVIEW,
 		Icon: HomeIcon,
 	},
 	{
@@ -29,7 +29,7 @@ export const navItems = [
 		Icon: WalletIcon,
 	},
 	{
-		label: "Me",
+		label: "My Account",
 		href: pageRoutes.dashboardRoutes.ME,
 		Icon: MeIcon,
 	},

@@ -101,9 +101,45 @@ body {
 .custom-container {
 	@apply max-w-325 mx-auto px-3 sm:px-6 lg:px-8;
 }
+.dashboard-custom-container {
+	@apply max-w-400 mx-auto px-3 sm:px-6 lg:px-8;
+}
 
 .landing-h2 {
 	@apply text-[42px] leading-[99%] lg:text-[52px];
+}
+
+.hide-scroll::-webkit-scrollbar {
+	display: none;
+	scrollbar-width: 1px;
+	scroll-behavior: smooth;
+	scrollbar-color: #18234f;
+}
+
+.scroll {
+	scrollbar-width: thin; /* auto | thin | none */
+	scrollbar-color: #3100b8; /* thumb color and track color */
+}
+
+/* WebKit Browsers */
+.scroll::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+
+.scroll::-webkit-scrollbar-track {
+	background: white;
+	border-radius: 5px;
+}
+
+.scroll::-webkit-scrollbar-thumb {
+	background-color: black;
+	border-radius: 5px;
+	border: 2px solid white; /* optional: adds padding */
+}
+
+.scroll::-webkit-scrollbar-thumb:hover {
+	background-color: #555;
 }
 
 /* @theme inline {

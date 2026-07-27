@@ -45,7 +45,7 @@ export default function CreateProfileForm() {
 		setTimeout(() => {
 			toast.success("", "Profile Created");
 			setIsLoading(false);
-			router.push(pageRoutes.dashboardRoutes.HOME);
+			router.push(pageRoutes.dashboardRoutes.OVERVIEW);
 		}, 2000);
 	};
 

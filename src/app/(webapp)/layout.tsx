@@ -8,11 +8,15 @@ export default function Layout({
 	children: React.ReactNode;
 }>) {
 	return (
-		<div className="">
-			<Navbar />
-			<div className="">
+		<div className="lg:flex lg:overflow-hidden lg:max-h-screen">
+			<div className="lg:flex-4/12 max-w-65 xl:max-w-70">
+				<Navbar />
+			</div>
+			<div className="lg:flex-9/12">
 				<Header />
-				<div className="pt-20 h-[200vh] bg-green-400">{children}</div>
+				<div className="max-lg:pt-20 lg:max-h-screen overflow-y-auto hide-scroll bg-white dashboard-custom-container">
+					<div className="h-[200vh]">{children}</div>
+				</div>
 			</div>
 		</div>
 	);
