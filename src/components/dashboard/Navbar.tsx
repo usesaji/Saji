@@ -35,7 +35,7 @@ export default function Navbar() {
 											</div>
 
 											<span
-												className={`text-lg xl:text-[21px] ml-5 xl:ml-7 transition hover:text-neutral-dark ${
+												className={`text-lg xl:text-xl ml-5 xl:ml-7 transition hover:text-neutral-dark ${
 													active
 														? "text-neutral-dark"
 														: "text-neutral-light-hover"
