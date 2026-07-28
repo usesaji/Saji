@@ -10,7 +10,9 @@ export const pageRoutes = {
 
 	dashboardRoutes: {
 		OVERVIEW: "/overview",
-		GROUP: "/group",
+		GROUPS: "/groups",
+		GROUP: (id: string) => `/groups/${id}`,
+
 		ACTIVITY: "/activity",
 		WALLET: "/wallet",
 		ME: "/profile",

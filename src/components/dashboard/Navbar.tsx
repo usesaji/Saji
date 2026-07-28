@@ -22,7 +22,7 @@ export default function Navbar() {
 					<nav className="mt-15 pl-7.5">
 						<ul className="flex justify-between flex-col bg-white gap-10">
 							{navItems.map(({ href, label, Icon }) => {
-								const active = pathname === href;
+								const active = pathname.includes(href);
 								return (
 									<li key={href}>
 										<Link href={href} className="flex items-center ">
@@ -85,7 +85,7 @@ export default function Navbar() {
 				<nav className="custom-container py-3.5 sm:py-5">
 					<ul className="flex items-center justify-between">
 						{navItems.map(({ href, label, Icon }) => {
-							const active = pathname === href;
+							const active = pathname.includes(href);
 							return (
 								<li key={href}>
 									<Link

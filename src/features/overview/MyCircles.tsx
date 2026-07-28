@@ -11,7 +11,7 @@ export default function MyCircles() {
 			<div className="mt-7.5 md:mt-10 flex items-center justify-between">
 				<h4 className="md:text-lg">Your Circles</h4>
 				<Link
-					href={pageRoutes.dashboardRoutes.GROUP}
+					href={pageRoutes.dashboardRoutes.GROUPS}
 					className="flex items-center"
 				>
 					<span className="text-xs md:text-sm">View All</span>

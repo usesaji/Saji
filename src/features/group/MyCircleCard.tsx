@@ -4,6 +4,8 @@ import React from "react";
 import { Button } from "../../components/ui/button";
 import { getProgressStyle } from "../../lib/utils/progress-style";
 import { CircleGroup } from "../../lib/utils/mock-data";
+import { pageRoutes } from "../../config/routes";
+import { useRouter } from "next/navigation";
 
 const statusStyles: Record<CircleGroup["status"], string> = {
 	PAID: "bg-success-50 text-success-700",
@@ -18,7 +20,10 @@ interface MyCircleCardProps {
 const formatAmount = (value: number) => `$${value.toLocaleString()}`;
 
 const MyCircleCard = ({ circle }: MyCircleCardProps) => {
+	const router = useRouter();
+
 	const {
+		id,
 		title,
 		subtitle,
 		image,
@@ -33,8 +38,15 @@ const MyCircleCard = ({ circle }: MyCircleCardProps) => {
 	const progressPercent = Math.min(100, Math.round((current / target) * 100));
 	const progressStyle = getProgressStyle(progressPercent);
 
+	const viewCard = () => {
+		router.push(pageRoutes.dashboardRoutes.GROUP(id));
+	};
+
 	return (
-		<div className="bg-[#f8f8f8] rounded-xl py-2 px-3 md:py-5 md:px-6 space-y-2.5 md:space-y-3 border border-[#f8f8f8] hover:border-accent duration-200 cursor-pointer">
+		<div
+			onClick={viewCard}
+			className="bg-[#f8f8f8] rounded-xl py-2 px-3 md:py-5 md:px-6 space-y-2.5 md:space-y-3 border border-[#f8f8f8] hover:border-accent duration-200 cursor-pointer"
+		>
 			<div className="flex justify-between items-start">
 				<div className="max-md:hidden mb-9 flex items-center gap-2.5">
 					<div className="rounded-full h-15 w-15 overflow-hidden">
@@ -125,7 +137,11 @@ const MyCircleCard = ({ circle }: MyCircleCardProps) => {
 						</div>
 					</div>
 				</div>
-				<Button variant="dark" className="">
+				<Button
+					href={pageRoutes.dashboardRoutes.GROUP(id)}
+					variant="dark"
+					className=""
+				>
 					View Details
 				</Button>
 			</div>

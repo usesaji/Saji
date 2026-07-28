@@ -15,7 +15,7 @@ export const navItems = [
 	},
 	{
 		label: "Groups",
-		href: pageRoutes.dashboardRoutes.GROUP,
+		href: pageRoutes.dashboardRoutes.GROUPS,
 		Icon: GroupsIcon,
 	},
 	{
