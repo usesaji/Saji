@@ -16,9 +16,15 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'memo',
     'memo_type',
     'destination_label',
+    'is_primary',
 ])]
 class WithdrawInfo extends Model
 {
+    protected function casts(): array
+    {
+        return ['is_primary' => 'boolean'];
+    }
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);

@@ -4,10 +4,13 @@ use App\Http\Controllers\ActivityController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\GoogleController;
 use App\Http\Controllers\Auth\OtpController;
+use App\Http\Controllers\ChallengeController;
 use App\Http\Controllers\ContributionController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\FiatDepositController;
 use App\Http\Controllers\GroupController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\PublicCircleController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\UserDashboardController;
 use App\Http\Controllers\WalletController;
@@ -54,9 +57,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/profile/password', [ProfileController::class, 'changePassword']);
     Route::patch('/profile/security', [ProfileController::class, 'updateSecurity']);
 
-    // Withdraw info: where payouts should land (public address only).
-    Route::get('/withdraw-info', [WithdrawInfoController::class, 'show']);
-    Route::put('/withdraw-info', [WithdrawInfoController::class, 'upsert']);
+    // Withdraw destinations: multiple saved payout targets (public address only).
+    Route::get('/withdraw-info', [WithdrawInfoController::class, 'index']);
+    Route::post('/withdraw-info', [WithdrawInfoController::class, 'store']);
+    Route::patch('/withdraw-info/{withdrawInfo}', [WithdrawInfoController::class, 'update']);
+    Route::post('/withdraw-info/{withdrawInfo}/primary', [WithdrawInfoController::class, 'setPrimary']);
+    Route::delete('/withdraw-info/{withdrawInfo}', [WithdrawInfoController::class, 'destroy']);
 
     // Activity / Notification feed (filters: all|contributions|payout|withdrawal).
     Route::get('/activity', [ActivityController::class, 'index']);
@@ -69,18 +75,40 @@ Route::middleware('auth:sanctum')->group(function () {
     // Wallet (non-custodial): balance, fund info, withdraw, history.
     Route::get('/wallet/balance', [WalletController::class, 'balance']);
     Route::get('/wallet/fund', [WalletController::class, 'fund']);
+
+    // Fiat deposit via Stellar SEP-24 anchor (non-custodial; wallet signs auth).
+    Route::get('/fiat/deposit/info', [FiatDepositController::class, 'info']);
+    Route::post('/fiat/deposit/challenge', [FiatDepositController::class, 'challenge']);
+    Route::post('/fiat/deposit/start', [FiatDepositController::class, 'start']);
+    Route::get('/fiat/deposit/{transaction}/status', [FiatDepositController::class, 'status']);
     Route::post('/wallet/withdraw', [WalletController::class, 'withdraw']);
     Route::post('/wallet/withdraw/submit', [WalletController::class, 'submitWithdraw']);
     Route::get('/wallet/history', [WalletController::class, 'history']);
+
+    // Public savings challenges (open circles): browse, create, join, leave.
+    Route::get('/challenges', [PublicCircleController::class, 'index']);
+    Route::post('/challenges', [PublicCircleController::class, 'store']);
+    Route::post('/challenges/{group}/join', [PublicCircleController::class, 'join']);
+    Route::post('/challenges/{group}/leave', [PublicCircleController::class, 'leave']);
+    // Challenge progress: save toward the target, my progress, circle summary.
+    Route::get('/challenges/{group}/summary', [ChallengeController::class, 'summary']);
+    Route::get('/challenges/{group}/progress', [ChallengeController::class, 'myProgress']);
+    Route::post('/challenges/{group}/deposit', [ChallengeController::class, 'deposit']);
 
     // Groups
     Route::get('/groups', [GroupController::class, 'index']);
     Route::post('/groups', [GroupController::class, 'store']);
     Route::get('/groups/{group}', [GroupController::class, 'show']);
-    Route::post('/groups/{group}/join', [GroupController::class, 'join']);
+    Route::get('/groups/{group}/circle', [GroupController::class, 'circle']);
+    Route::get('/groups/{group}/deposit', [GroupController::class, 'depositPage']);
+    Route::post('/groups/{group}/photo', [GroupController::class, 'uploadPhoto']);
+    // Joining is LINK-ONLY — see /groups/join/{token} below. No join-by-id.
     Route::post('/groups/{group}/members/{member}/approve', [GroupController::class, 'approve']);
+    // Drag-and-drop "who gets paid first": set the manual payout order.
+    Route::post('/groups/{group}/payout-order', [GroupController::class, 'setPayoutOrder']);
     // Invite link page: organizer fetches the shareable link; anyone joins by token.
     Route::get('/groups/{group}/invite-link', [GroupController::class, 'inviteLink']);
+    Route::get('/groups/join/{token}', [GroupController::class, 'joinPreview']);
     Route::post('/groups/join/{token}', [GroupController::class, 'joinByToken']);
     // Broadcast a wallet-signed tx (create_group / join / contribution) on-chain.
     Route::post('/groups/{group}/submit', [GroupController::class, 'submitOnchain']);

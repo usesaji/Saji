@@ -48,7 +48,7 @@ fn active_group(s: &Setup, n: u32, amount: i128, fee_bps: u32) -> (u64, Address,
     let organizer = s.funded_member(amount * 10);
     let group_id = s.client.create_group(
         &organizer, &s.token, &amount, &604_800, &fee_bps,
-        &0u32, &0u64, &PayoutOrder::Manual,
+        &0u32, &0u64, &PayoutOrder::Manual, &LatePenalty::DeductFromBalance,
     );
 
     let mut members = soroban_sdk::Vec::new(&s.env);
@@ -163,7 +163,7 @@ fn start_cycle_requires_two_members() {
     let organizer = s.funded_member(amount);
     let group_id = s.client.create_group(
         &organizer, &s.token, &amount, &604_800, &0,
-        &0u32, &0u64, &PayoutOrder::Manual,
+        &0u32, &0u64, &PayoutOrder::Manual, &LatePenalty::DeductFromBalance,
     );
     // Only one member -> revert (TooFewMembers).
     s.client.start_cycle(&group_id);
@@ -206,13 +206,14 @@ fn create_group_stores_rule_fields() {
     let organizer = s.funded_member(amount);
     let group_id = s.client.create_group(
         &organizer, &s.token, &amount, &604_800, &50,
-        &200u32, &3_600u64, &PayoutOrder::Random,
+        &200u32, &3_600u64, &PayoutOrder::Random, &LatePenalty::RemoveMember,
     );
 
     let cfg = s.client.get_group(&group_id);
     assert_eq!(cfg.late_fee_bps, 200);
     assert_eq!(cfg.grace_period, 3_600);
     assert_eq!(cfg.payout_order, PayoutOrder::Random);
+    assert_eq!(cfg.late_penalty, LatePenalty::RemoveMember);
     assert_eq!(cfg.fee_bps, 50);
 }
 
@@ -225,7 +226,7 @@ fn create_group_rejects_late_fee_over_100_percent() {
     // late_fee_bps > 10000 must revert (InvalidFee).
     s.client.create_group(
         &organizer, &s.token, &amount, &604_800, &0,
-        &10_001u32, &0u64, &PayoutOrder::Manual,
+        &10_001u32, &0u64, &PayoutOrder::Manual, &LatePenalty::DeductFromBalance,
     );
 }
 
@@ -238,7 +239,7 @@ fn create_group_rejects_zero_cycle_length() {
     // cycle_length == 0 must revert (InvalidCycleLength).
     s.client.create_group(
         &organizer, &s.token, &amount, &0, &0,
-        &0u32, &0u64, &PayoutOrder::Manual,
+        &0u32, &0u64, &PayoutOrder::Manual, &LatePenalty::DeductFromBalance,
     );
 }
 
@@ -250,9 +251,81 @@ fn create_group_rejects_zero_cycle_length_typed_error() {
     // The `try_` variant surfaces the typed error without panicking.
     let res = s.client.try_create_group(
         &organizer, &s.token, &amount, &0, &0,
-        &0u32, &0u64, &PayoutOrder::Manual,
+        &0u32, &0u64, &PayoutOrder::Manual, &LatePenalty::DeductFromBalance,
     );
     assert_eq!(res, Err(Ok(Error::InvalidCycleLength)));
+}
+
+// ---- Manual payout order (drag-and-drop "who gets paid first") ----
+
+#[test]
+fn set_payout_order_changes_who_is_paid_first() {
+    let s = setup();
+    let amount = 10_000_000i128;
+
+    // Build an Open group of 3 (organizer + 2) but DON'T start the cycle yet.
+    let organizer = s.funded_member(amount * 10);
+    let group_id = s.client.create_group(
+        &organizer, &s.token, &amount, &604_800, &0,
+        &0u32, &0u64, &PayoutOrder::Manual, &LatePenalty::DeductFromBalance,
+    );
+    let m2 = s.funded_member(amount * 10);
+    let m3 = s.funded_member(amount * 10);
+    s.client.join_group(&group_id, &m2);
+    s.client.join_group(&group_id, &m3);
+
+    // Default order pays the organizer first (index 0). Reorder so m3 is first.
+    let mut order = soroban_sdk::Vec::new(&s.env);
+    order.push_back(m3.clone());
+    order.push_back(organizer.clone());
+    order.push_back(m2.clone());
+    s.client.set_payout_order(&group_id, &order);
+
+    s.client.start_cycle(&group_id);
+
+    // First cycle's recipient is now m3.
+    assert_eq!(s.client.next_recipient(&group_id), m3);
+}
+
+#[test]
+fn set_payout_order_rejects_non_permutation() {
+    let s = setup();
+    let amount = 10_000_000i128;
+    let organizer = s.funded_member(amount * 10);
+    let group_id = s.client.create_group(
+        &organizer, &s.token, &amount, &604_800, &0,
+        &0u32, &0u64, &PayoutOrder::Manual, &LatePenalty::DeductFromBalance,
+    );
+    let m2 = s.funded_member(amount * 10);
+    s.client.join_group(&group_id, &m2);
+
+    // A stranger is not a member — must revert (InvalidOrder).
+    let stranger = s.funded_member(amount);
+    let mut bad = soroban_sdk::Vec::new(&s.env);
+    bad.push_back(organizer.clone());
+    bad.push_back(stranger);
+    let res = s.client.try_set_payout_order(&group_id, &bad);
+    assert_eq!(res, Err(Ok(Error::InvalidOrder)));
+}
+
+#[test]
+fn set_payout_order_rejects_when_not_manual() {
+    let s = setup();
+    let amount = 10_000_000i128;
+    let organizer = s.funded_member(amount * 10);
+    // Random policy: explicit manual order does not apply.
+    let group_id = s.client.create_group(
+        &organizer, &s.token, &amount, &604_800, &0,
+        &0u32, &0u64, &PayoutOrder::Random, &LatePenalty::DeductFromBalance,
+    );
+    let m2 = s.funded_member(amount * 10);
+    s.client.join_group(&group_id, &m2);
+
+    let mut order = soroban_sdk::Vec::new(&s.env);
+    order.push_back(m2.clone());
+    order.push_back(organizer.clone());
+    let res = s.client.try_set_payout_order(&group_id, &order);
+    assert_eq!(res, Err(Ok(Error::OrderNotManual)));
 }
 
 #[test]

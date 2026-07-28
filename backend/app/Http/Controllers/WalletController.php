@@ -46,8 +46,15 @@ class WalletController extends Controller
     }
 
     /**
-     * "Fund account": where and how to add funds. Non-custodial — the user
-     * sends to their OWN address; we just surface it plus an optional on-ramp.
+     * "Add money" / Fund account — the payment methods the screen offers.
+     *
+     * Non-custodial, so there is no Saji-held account to deposit into. The two
+     * methods are:
+     *   1. stellar_network  — connect a wallet and send USDC to the user's OWN
+     *      Stellar address (shown here, self-custody, no routing memo).
+     *   2. bank_transfer     — hand off to an on-ramp provider where the user
+     *      enters THEIR bank/account details; the ramp delivers USDC to their
+     *      Stellar address. We never collect bank details ourselves.
      */
     public function fund(Request $request): JsonResponse
     {
@@ -56,11 +63,27 @@ class WalletController extends Controller
         abort_if(! $user->stellar_address, 422, 'Link a Stellar wallet before funding.');
 
         return response()->json([
-            'stellar_address' => $user->stellar_address,
             'asset_code' => 'USDC',
-            'memo' => null, // self-custody: no routing memo needed
-            'onramp_url' => config('services.stellar.onramp_url'),
-            'note' => 'Send USDC on the Stellar network to this address.',
+            'methods' => [
+                [
+                    'method' => 'stellar_network',
+                    'label' => 'Stellar network — connect wallet',
+                    'stellar_address' => $user->stellar_address,
+                    'memo' => null, // self-custody: no routing memo needed
+                    'note' => 'Send USDC on the Stellar network to this address.',
+                ],
+                [
+                    'method' => 'bank_transfer',
+                    'label' => 'Bank transfer',
+                    // Fiat deposits run through a Stellar SEP-24 anchor. The
+                    // frontend drives the flow via /fiat/deposit/* (challenge →
+                    // start → status); the anchor collects the user's bank
+                    // details + KYC and delivers USDC to their Stellar address.
+                    'flow' => 'sep24',
+                    'start_endpoint' => '/api/fiat/deposit/challenge',
+                    'note' => 'Complete a bank transfer with our Stellar anchor; USDC arrives on your Stellar address.',
+                ],
+            ],
         ]);
     }
 

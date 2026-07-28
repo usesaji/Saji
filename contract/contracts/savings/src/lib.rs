@@ -29,6 +29,9 @@ pub enum Status {
 /// member at `Cycle`'s index in the `Members` vec; this field records the
 /// policy the organizer chose off-chain so it is auditable on-chain and so a
 /// future upgrade can enforce ordering (e.g. a verifiable random shuffle).
+/// How the payout rotation order is decided. The contract pays the member at
+/// `Cycle`'s index in the `Members` vec; with `Manual` the organizer can set
+/// that order explicitly via `set_payout_order` before the cycle starts.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[contracttype]
 pub enum PayoutOrder {
@@ -36,6 +39,18 @@ pub enum PayoutOrder {
     Random = 1,
     Vote = 2,
     Custom = 3,
+}
+
+/// What happens to a member who misses a contribution. Stored on-chain so the
+/// rule is auditable; enforcement ships with the future `resolve_default` hook
+/// (SPEC §7). The strict "everyone pays" rule still governs the MVP.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[contracttype]
+pub enum LatePenalty {
+    /// Deduct the late fee from what the defaulter is owed / their balance.
+    DeductFromBalance = 0,
+    /// Remove the defaulter from the circle if they cannot cover it.
+    RemoveMember = 1,
 }
 
 #[derive(Clone)]
@@ -54,6 +69,9 @@ pub struct GroupConfig {
     pub grace_period: u64,
     /// Rotation-order policy chosen at creation (see `PayoutOrder`).
     pub payout_order: PayoutOrder,
+    /// What happens on a missed contribution (see `LatePenalty`). Recorded now;
+    /// enforced by the future default-handling upgrade.
+    pub late_penalty: LatePenalty,
     pub member_count: u32,
     pub status: Status,
 }
@@ -92,6 +110,12 @@ pub enum Error {
     NotAllContributed = 9,
     TooFewMembers = 10,
     InvalidCycleLength = 11,
+    /// A proposed manual order isn't a valid permutation of the current members
+    /// (wrong length, missing member, or a duplicate/stranger).
+    InvalidOrder = 12,
+    /// set_payout_order was called on a group whose order is Random/Vote/etc.,
+    /// where an explicit manual order does not apply.
+    OrderNotManual = 13,
 }
 
 const BPS_DENOMINATOR: i128 = 10_000;
@@ -126,6 +150,7 @@ impl SavingsContract {
         late_fee_bps: u32,
         grace_period: u64,
         payout_order: PayoutOrder,
+        late_penalty: LatePenalty,
     ) -> Result<u64, Error> {
         organizer.require_auth();
 
@@ -154,6 +179,7 @@ impl SavingsContract {
             late_fee_bps,
             grace_period,
             payout_order,
+            late_penalty,
             member_count: 1,
             status: Status::Draft,
         };
@@ -207,6 +233,61 @@ impl SavingsContract {
             .publish((symbol_short!("joined"), group_id), member);
 
         Self::bump_ttl(&env, group_id);
+        Ok(())
+    }
+
+    /// Organizer sets the exact payout rotation order (the drag-and-drop "who
+    /// gets paid first" feature). Only valid while the group is still forming
+    /// (Draft/Open) and only when the group's policy is `Manual`. The proposed
+    /// `order` must be a permutation of the current members — same length, every
+    /// current member present exactly once — so no one is dropped or injected.
+    /// The order is frozen when `start_cycle` locks the group.
+    pub fn set_payout_order(env: Env, group_id: u64, order: Vec<Address>) -> Result<(), Error> {
+        let storage = env.storage().persistent();
+        let config = Self::load_config(&env, group_id)?;
+
+        config.organizer.require_auth();
+
+        if config.status != Status::Draft && config.status != Status::Open {
+            return Err(Error::WrongStatus);
+        }
+        if config.payout_order != PayoutOrder::Manual {
+            return Err(Error::OrderNotManual);
+        }
+
+        let members: Vec<Address> = storage
+            .get(&DataKey::Members(group_id))
+            .ok_or(Error::GroupNotFound)?;
+
+        // Same size, and every proposed entry is a current member (no strangers).
+        if order.len() != members.len() {
+            return Err(Error::InvalidOrder);
+        }
+        for addr in order.iter() {
+            if !members.contains(&addr) {
+                return Err(Error::InvalidOrder);
+            }
+        }
+        // No duplicates: each current member appears exactly once in `order`.
+        // (Combined with equal length + subset above, this proves a permutation.)
+        for m in members.iter() {
+            let mut seen = 0u32;
+            for a in order.iter() {
+                if a == m {
+                    seen += 1;
+                }
+            }
+            if seen != 1 {
+                return Err(Error::InvalidOrder);
+            }
+        }
+
+        storage.set(&DataKey::Members(group_id), &order);
+        Self::bump_ttl(&env, group_id);
+
+        env.events()
+            .publish((symbol_short!("reorder"), group_id), ());
+
         Ok(())
     }
 

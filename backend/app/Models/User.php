@@ -42,10 +42,23 @@ class User extends Authenticatable
         return $this->hasMany(Payout::class, 'recipient_id');
     }
 
-    /** Where this user's payouts should be withdrawn (public address only). */
+    /** All saved payout destinations (public addresses only). */
+    public function withdrawDestinations(): HasMany
+    {
+        return $this->hasMany(WithdrawInfo::class);
+    }
+
+    /**
+     * The primary payout destination — used as the default when a withdrawal
+     * doesn't name one. Falls back to the most recent if none is flagged.
+     */
     public function withdrawInfo(): HasOne
     {
-        return $this->hasOne(WithdrawInfo::class);
+        // Prefer the flagged primary; tie-break to the newest destination.
+        return $this->hasOne(WithdrawInfo::class)->ofMany([
+            'is_primary' => 'max',
+            'id' => 'max',
+        ]);
     }
 
     /**

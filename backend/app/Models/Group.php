@@ -23,11 +23,16 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'fee_bps',
     'late_fee_bps',
     'grace_period_hours',
+    'late_penalty',
     'payout_order',
+    'group_type',
     'auto_approve_join',
     'hide_balances',
     'invite_token',
     'status',
+    'circle_kind',
+    'savings_target',
+    'challenge_ends_at',
     'current_cycle',
     'next_recipient_id',
     'next_payout_at',
@@ -45,6 +50,8 @@ class Group extends Model
             'grace_period_hours' => 'integer',
             'auto_approve_join' => 'boolean',
             'hide_balances' => 'boolean',
+            'savings_target' => 'decimal:7',
+            'challenge_ends_at' => 'datetime',
             'current_cycle' => 'integer',
             'onchain_group_id' => 'integer',
             'next_payout_at' => 'datetime',
@@ -79,5 +86,17 @@ class Group extends Model
     public function transactions(): HasMany
     {
         return $this->hasMany(Transaction::class);
+    }
+
+    /** Saves toward the target (public challenge circles only). */
+    public function challengeDeposits(): HasMany
+    {
+        return $this->hasMany(ChallengeDeposit::class);
+    }
+
+    /** True for a public savings challenge (no pool/rotation). */
+    public function isChallenge(): bool
+    {
+        return $this->circle_kind === 'challenge';
     }
 }
