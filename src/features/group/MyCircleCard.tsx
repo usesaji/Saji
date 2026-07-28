@@ -2,41 +2,91 @@
 import Image from "next/image";
 import React from "react";
 import { Button } from "../../components/ui/button";
+import { getProgressStyle } from "../../lib/utils/progress-style";
+import { CircleGroup } from "../../lib/utils/mock-data";
 
-const MyCircleCard = () => {
+const statusStyles: Record<CircleGroup["status"], string> = {
+	PAID: "bg-success-50 text-success-700",
+	PENDING: "bg-warning-100 text-warning-800",
+	OVERDUE: "bg-error-50 text-error-500",
+};
+
+interface MyCircleCardProps {
+	circle: CircleGroup;
+}
+
+const formatAmount = (value: number) => `$${value.toLocaleString()}`;
+
+const MyCircleCard = ({ circle }: MyCircleCardProps) => {
+	const {
+		title,
+		subtitle,
+		image,
+		current,
+		target,
+		status,
+		nextPayoutDate,
+		memberCount,
+		memberAvatarsImage,
+	} = circle;
+
+	const progressPercent = Math.min(100, Math.round((current / target) * 100));
+	const progressStyle = getProgressStyle(progressPercent);
+
 	return (
-		<div className="bg-[#f8f8f8] rounded-xl py-2 px-3 md:py-5 md:px-6 space-y-2.5 md:space-y-3">
+		<div className="bg-[#f8f8f8] rounded-xl py-2 px-3 md:py-5 md:px-6 space-y-2.5 md:space-y-3 border border-[#f8f8f8] hover:border-accent duration-200 cursor-pointer">
 			<div className="flex justify-between items-start">
 				<div className="max-md:hidden mb-9 flex items-center gap-2.5">
 					<div className="rounded-full h-15 w-15 overflow-hidden">
 						<Image
 							alt="Group Image"
-							src="/images/about/backed.svg"
-							height={300}    
+							src={image}
+							height={300}
 							width={300}
 							className="h-full w-full object-cover"
 						/>
 					</div>
 					<div>
 						<h6 className="text-xs">TARGET</h6>
-						<div className="text-xs md:text-base">$12,450 / $50,000</div>
+						<div className="text-xs md:text-base">
+							{formatAmount(current)} / {formatAmount(target)}
+						</div>
 					</div>
 				</div>
-				<div className="bg-primary-light rounded-[33px] text-primary px-3 py-2.25 text-xs max-md:hidden">
-					PAID
+				<div
+					className={`rounded-[33px] px-3 py-2.25 text-xs max-md:hidden ${statusStyles[status]}`}
+				>
+					{status}
 				</div>
 			</div>
 			<div className="flex justify-between gap-4">
 				<h5 className="flex flex-col">
-					<span className="text-xs md:text-xl lg:text-2xl">
-						Agro Growth Circle
+					<span className="text-xs sm:text-base md:text-xl lg:text-2xl">
+						{title}
 					</span>
-					<span className="text-xs">Monthly COntribution</span>
+					<span className="text-xs max-md:hidden">{subtitle}</span>
 				</h5>
-				<div className="text-[10px] md:text-sm md:hidden">12 Members</div>
+				<div className="flex items-center gap-1 md:hidden">
+					<div className="h-4">
+						<img src={memberAvatarsImage} className="h-full" alt="" />
+					</div>
+					<div className="text-[10px] ssm:text-xs md:text-sm md:hidden">
+						{memberCount} Members
+					</div>
+				</div>
 			</div>
-			<div className="h-1.25 bg-neutral-light rounded-[900px] md:h-1.75">
-				<div className="bg-primary rounded-[900px] w-1/3 h-1.25 md:h-1.75"></div>
+			<div className="flex items-center justify-between gap-2">
+				<div className="h-1.25 bg-neutral-light rounded-[900px] md:h-1.75 flex-1">
+					<div
+						className={`${progressStyle.barColor} rounded-[900px] h-1.25 md:h-1.75 transition-all`}
+						style={{ width: `${progressPercent}%` }}
+					></div>
+				</div>
+				{/* <span
+					className={`hidden md:inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-medium ${progressStyle.badgeBg} ${progressStyle.badgeText}`}
+				>
+					{progressStyle.label}
+				</span> */}
 			</div>
 			{/*  */}
 			<div className="flex items-center justify-between gap-4 md:hidden">
@@ -54,9 +104,13 @@ const MyCircleCard = () => {
 						/>
 					</svg>
 
-					<span className="text-[10px] md:text-sm ">Next Payout: Oct 24</span>
+					<span className="text-[10px] sm:text-sm ">
+						Next Payout: {nextPayoutDate}
+					</span>
 				</div>
-				<div className="text-xs md:text-base ">12,450 / 50,000</div>
+				<div className="text-xs sm:text-sm md:text-base ">
+					{current.toLocaleString()} / {target.toLocaleString()}
+				</div>
 			</div>
 			{/*  */}
 			<div className="flex justify-between items-center mt-18 gap-4 max-md:hidden">
@@ -64,16 +118,16 @@ const MyCircleCard = () => {
 					<h6 className="text-xs mb-2">MEMBERS</h6>
 					<div className="flex items-center gap-2 flex-wrap">
 						<div className="h-8.5">
-							<img
-								src="/images/review-user-imgs.png"
-								className="h-full"
-								alt=""
-							/>
+							<img src={memberAvatarsImage} className="h-full" alt="" />
 						</div>
-						<div className="whitespace-nowrap max-lg:text-sm">12 Members</div>
+						<div className="whitespace-nowrap max-lg:text-sm">
+							{memberCount} Members
+						</div>
 					</div>
 				</div>
-				<Button variant="dark">View Details</Button>
+				<Button variant="dark" className="">
+					View Details
+				</Button>
 			</div>
 		</div>
 	);

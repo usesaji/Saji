@@ -81,7 +81,7 @@ export default function Navbar() {
 			</aside>
 
 			{/* MOBILE NAV */}
-			<aside className=" bg-white fixed inset-x-0 bottom-0 lg:hidden">
+			<aside className=" bg-white fixed inset-x-0 bottom-0 lg:hidden z-50">
 				<nav className="custom-container py-3.5 sm:py-5">
 					<ul className="flex items-center justify-between">
 						{navItems.map(({ href, label, Icon }) => {
