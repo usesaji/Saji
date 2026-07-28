@@ -1,5 +1,15 @@
-import React from "react";
+import { WalletCard } from "../../../features/wallet/WalletBallanceCard";
+import MyCircles from "../../../features/overview/MyCircles";
+import RecentActivities from "../../../features/overview/RecentActivities";
 
 export default function Page() {
-	return <div>Page</div>;
+	return (
+		<div>
+			<WalletCard />
+
+			<MyCircles />
+
+			<RecentActivities />
+		</div>
+	);
 }

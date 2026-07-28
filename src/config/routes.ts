@@ -8,7 +8,14 @@ export const pageRoutes = {
 		OTP: (email: string) => `/auth/register/verify-otp?email=${email}`,
 	},
 
-	dashboardRoutes:{
-		OVERVIEW: '/overview'
-	}
+	dashboardRoutes: {
+		OVERVIEW: "/overview",
+		GROUPS: "/groups",
+		NEW_GROUP: "/groups/create",
+		GROUP: (id: string) => `/groups/${id}`,
+
+		ACTIVITY: "/activity",
+		WALLET: "/wallet",
+		ME: "/profile",
+	},
 };
