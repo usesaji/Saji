@@ -1,6 +1,7 @@
 import React from "react";
 import Header from "../../components/dashboard/Header";
 import Navbar from "../../components/dashboard/Navbar";
+// import CreateGroupFloatBtn from "../../features/group/CreateGroupFloatBtn";
 
 export default function Layout({
 	children,
@@ -16,6 +17,7 @@ export default function Layout({
 				<Header />
 				<div className="pt-24 md:pt-26 lg:pt-5 lg:max-h-screen overflow-y-auto hide-scroll bg-white dashboard-custom-container ">
 					<div className="min-h-screen pb-32 lg:pb-60">{children}</div>
+					
 				</div>
 			</div>
 		</div>

@@ -11,6 +11,7 @@ export const pageRoutes = {
 	dashboardRoutes: {
 		OVERVIEW: "/overview",
 		GROUPS: "/groups",
+		NEW_GROUP: "/groups/create",
 		GROUP: (id: string) => `/groups/${id}`,
 
 		ACTIVITY: "/activity",

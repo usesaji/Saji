@@ -47,7 +47,7 @@ function StatsCard({
 
 	return (
 		<div
-			className={`${color} text-white rounded-[10.55px] px-3 pt-3 pb-4 md:px-4 md:pt-4 md:pb-5 min-w-50 md:min-w-80 lg:min-w-2/5 min-h-18 md:min-h-25  w-full`}
+			className={`${color} text-white rounded-[10.55px] px-3 pt-3 pb-4 md:px-4 md:pt-4 md:pb-5 min-w-50 md:min-w-80 lg:min-w-2/5 min-h-20 md:min-h-25  w-full`}
 		>
 			<h5 className="text-xs font-light md:text-sm">{title}</h5>
 			<div className="flex items-center gap-2.5 mt-0.5 min-w-0">

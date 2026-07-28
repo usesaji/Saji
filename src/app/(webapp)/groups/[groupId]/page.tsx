@@ -14,7 +14,7 @@ export default async function GroupPreviewPage({
 	const { groupId: id } = await params;
 	const group = getCircleById(id);
 
-	console.log(id);
+	// console.log(id);
 
 	if (!group) {
 		return <div>Group not found</div>;
