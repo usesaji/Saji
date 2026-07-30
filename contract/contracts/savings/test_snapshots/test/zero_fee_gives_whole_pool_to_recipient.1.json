@@ -84,6 +84,9 @@
                 },
                 {
                   "u32": 0
+                },
+                {
+                  "u32": 0
                 }
               ]
             }
@@ -401,6 +404,14 @@
                     {
                       "key": {
                         "symbol": "late_fee_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "late_penalty"
                       },
                       "val": {
                         "u32": 0

@@ -60,6 +60,7 @@ class StellarService
         int $lateFeeBps = 0,
         int $gracePeriod = 0,
         string $payoutOrder = 'Manual',
+        string $latePenalty = 'DeductFromBalance',
     ): string {
         return $this->buildInvoke($organizer, 'create_group', [
             'organizer' => $organizer,
@@ -69,8 +70,25 @@ class StellarService
             'fee_bps' => (string) $feeBps,
             'late_fee_bps' => (string) $lateFeeBps,
             'grace_period' => (string) $gracePeriod,
-            // Soroban enum arg is passed by its variant name.
+            // Soroban enum args are passed by their variant name.
             'payout_order' => $payoutOrder,
+            'late_penalty' => $latePenalty,
+        ]);
+    }
+
+    /**
+     * Organizer signs. Sets the exact manual payout order (drag-and-drop "who
+     * gets paid first"). `order` is the ordered list of member addresses; the
+     * contract validates it is a permutation of the current members.
+     *
+     * @param  array<int,string>  $order  member addresses, first-paid first
+     */
+    public function buildSetPayoutOrderTx(string $organizer, int $groupId, array $order): string
+    {
+        // The CLI takes a Vec<Address> arg as a JSON array of addresses.
+        return $this->buildInvoke($organizer, 'set_payout_order', [
+            'group_id' => (string) $groupId,
+            'order' => json_encode(array_values($order)),
         ]);
     }
 

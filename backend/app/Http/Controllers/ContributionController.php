@@ -35,6 +35,11 @@ class ContributionController extends Controller
     {
         $user = $request->user();
 
+        // Rotating-circle contributions only. A public challenge has no pooled
+        // contribution — members save to their own wallets via the challenge
+        // deposit endpoint instead.
+        abort_if($group->isChallenge(), 422, 'This is a savings challenge, not a rotating circle. Use the challenge deposit endpoint.');
+
         abort_unless(
             $group->members()->where('user_id', $user->id)->where('status', 'approved')->exists(),
             403,

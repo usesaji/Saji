@@ -115,6 +115,11 @@ class UserDashboardController extends Controller
             return null;
         }
 
+        // Quick deposit IS the ordinary contribution for the soonest-due circle
+        // — same amount, same cycle, same endpoint. We surface the exact
+        // contribute endpoint so the dashboard button drives the normal flow
+        // (POST there returns the unsigned contribute XDR to sign) rather than
+        // any separate deposit mechanism.
         return [
             'group_id' => $due->id,
             'group_name' => $due->name,
@@ -122,6 +127,7 @@ class UserDashboardController extends Controller
             'asset_code' => $due->asset_code,
             'cycle' => $due->current_cycle,
             'due_at' => $due->next_payout_at,
+            'contribute_endpoint' => "/api/groups/{$due->id}/contributions",
         ];
     }
 }

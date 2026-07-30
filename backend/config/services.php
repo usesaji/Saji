@@ -56,6 +56,14 @@ return [
         'usdc_sac' => env('STELLAR_USDC_SAC'),
         // Optional on-ramp link surfaced on the Wallet "Fund account" screen.
         'onramp_url' => env('STELLAR_ONRAMP_URL'),
+
+        // Fiat deposits use a Stellar SEP-24 anchor (non-custodial: the anchor
+        // delivers USDC to the user's OWN wallet). Provider-agnostic — set the
+        // anchor's home domain; the backend discovers its endpoints from the
+        // published stellar.toml. Defaults to the Stellar testnet anchor.
+        'anchor_home_domain' => env('STELLAR_ANCHOR_HOME_DOMAIN', 'testanchor.stellar.org'),
+        // The asset code the anchor issues for deposits (matches the pool token).
+        'anchor_asset_code' => env('STELLAR_ANCHOR_ASSET_CODE', 'USDC'),
     ],
 
 ];
