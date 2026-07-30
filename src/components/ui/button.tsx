@@ -1,4 +1,5 @@
 import * as React from "react";
+import Link from "next/link";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "../../lib/utils";
 import { FiLoader } from "react-icons/fi";
@@ -75,8 +76,54 @@ function Button(props: ButtonProps) {
 	);
 
 	if ("href" in props && props.href) {
-		const { href, ...linkProps } =
+		const href: string = props.href;
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
+		const { href: _href, onClick: consumerOnClick, ...restLinkProps } =
 			rest as React.AnchorHTMLAttributes<HTMLAnchorElement>;
+
+		const content = isLoading ? (
+			<span className="flex items-center gap-2">
+				<span className="opacity-80 animate-pulse">
+					<FiLoader size={36} />
+				</span>
+			</span>
+		) : (
+			children
+		);
+
+		// Only attach a click handler when one is actually needed (loading-guard
+		// or a caller-supplied onClick) — Button is often rendered from Server
+		// Components for plain navigation, and passing a function prop to
+		// next/link's Link (a Client Component) in that case throws "Event
+		// handlers cannot be passed to Client Component props".
+		const needsClickHandler = isLoading || Boolean(consumerOnClick);
+		const handleClick: React.MouseEventHandler<HTMLAnchorElement> = (e) => {
+			if (isLoading) {
+				e.preventDefault();
+				return;
+			}
+			consumerOnClick?.(e);
+		};
+		const clickHandlerProp = needsClickHandler ? { onClick: handleClick } : {};
+
+		// Internal routes get real client-side transitions via next/link;
+		// anything else (external URLs, mailto:, #anchors) stays a plain <a>.
+		const isInternal = href.startsWith("/");
+
+		if (isInternal) {
+			return (
+				<Link
+					data-slot="button"
+					href={href}
+					className={classes}
+					aria-disabled={isLoading}
+					{...restLinkProps}
+					{...clickHandlerProp}
+				>
+					{content}
+				</Link>
+			);
+		}
 
 		return (
 			<a
@@ -84,24 +131,10 @@ function Button(props: ButtonProps) {
 				href={href}
 				className={classes}
 				aria-disabled={isLoading}
-				onClick={(e) => {
-					if (isLoading) {
-						e.preventDefault();
-						return;
-					}
-					linkProps.onClick?.(e);
-				}}
-				{...linkProps}
+				{...restLinkProps}
+				{...clickHandlerProp}
 			>
-				{isLoading ? (
-					<span className="flex items-center gap-2">
-						<span className="opacity-80 animate-pulse">
-							<FiLoader size={36} />
-						</span>
-					</span>
-				) : (
-					children
-				)}
+				{content}
 			</a>
 		);
 	}

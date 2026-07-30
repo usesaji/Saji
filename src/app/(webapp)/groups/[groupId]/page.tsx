@@ -1,4 +1,4 @@
-import GroupPreview from "@/features/group/GroupPreview";
+import GroupPageClient from "@/features/group/GroupPageClient";
 import { getCircleById } from "../../../../lib/utils/mock-data";
 import GoBack from "../../../../components/dashboard/GoBack";
 
@@ -14,8 +14,6 @@ export default async function GroupPreviewPage({
 	const { groupId: id } = await params;
 	const group = getCircleById(id);
 
-	// console.log(id);
-
 	if (!group) {
 		return <div>Group not found</div>;
 	}
@@ -23,20 +21,7 @@ export default async function GroupPreviewPage({
 	return (
 		<div>
 			<GoBack />
-			<GroupPreview group={group} />
+			<GroupPageClient group={group} />
 		</div>
 	);
 }
-
-// import React from "react";
-// import GroupPreview from "../../../../features/group/GroupPreview";
-// import GoBack from "../../../../components/dashboard/GoBack";
-
-// export default function Page() {
-// 	return (
-// 		<div>
-// 			<GoBack />
-// 			<GroupPreview />
-// 		</div>
-// 	);
-// }

@@ -13,6 +13,9 @@ export const pageRoutes = {
 		GROUPS: "/groups",
 		NEW_GROUP: "/groups/create",
 		GROUP: (id: string) => `/groups/${id}`,
+		GROUP_CONTRIBUTE: (id: string) => `/groups/${id}/contribute`,
+		GROUP_INVITE: (id: string) => `/groups/${id}/invite`,
+		GROUP_ROTATION: (id: string) => `/groups/${id}/rotation`,
 
 		ACTIVITY: "/activity",
 		WALLET: "/wallet",

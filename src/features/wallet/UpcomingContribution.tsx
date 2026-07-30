@@ -1,6 +1,7 @@
 import React from "react";
 import { PiWalletLight } from "react-icons/pi";
 import { Button } from "../../components/ui/button";
+import { pageRoutes } from "../../config/routes";
 
 export default function UpcomingContribution() {
 	return (
@@ -16,7 +17,11 @@ export default function UpcomingContribution() {
 					</p>
 				</div>
 
-				<Button variant="dark" className="w-full md:w-fit shrink-0">
+				<Button
+					href={pageRoutes.dashboardRoutes.WALLET_ADD_MONEY}
+					variant="dark"
+					className="w-full md:w-fit shrink-0"
+				>
 					<PiWalletLight className="text-lg" />
 					<span className="lg:text-base">Fund Account</span>
 				</Button>

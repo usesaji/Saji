@@ -12,6 +12,7 @@ import {
 } from "../../components/ui/select";
 import { currencies } from "../../lib/utils";
 import { Button } from "../../components/ui/button";
+import { pageRoutes } from "../../config/routes";
 import { HiOutlinePlusSmall } from "react-icons/hi2";
 
 export const WalletCard = () => {
@@ -81,7 +82,10 @@ export const WalletCard = () => {
 				</div>
 			</div>
 			<div className="">
-				<Button className="bg-primary-dark w-full max-w-40">
+				<Button
+					href={pageRoutes.dashboardRoutes.WALLET_ADD_MONEY}
+					className="bg-primary-dark w-full max-w-40"
+				>
 					<span>Quick Deposit</span>
 					<HiOutlinePlusSmall className="scale-[1.3]" />
 				</Button>

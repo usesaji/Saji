@@ -1,3 +1,18 @@
+export type GroupVisibility = "public" | "private";
+
+/** "owner" = you created it, "member" = you've joined it, "none" = you haven't joined yet. */
+export type GroupMembership = "owner" | "member" | "none";
+
+export type PayoutOrderType = "random" | "manual" | "vote" | "custom";
+
+export interface PayoutRotationMember {
+	id: string;
+	name: string;
+	role: string; // "Organizer" | "Member"
+	date: string; // payout date, e.g. "Oct 15"
+	isSelf?: boolean; // renders the logged-in user's real avatar instead of initials
+}
+
 export interface CircleGroup {
 	id: string;
 	title: string;
@@ -15,7 +30,22 @@ export interface CircleGroup {
 	frequency: string; // e.g. "Monthly" | "Weekly" | "Daily"
 	latePenaltyLabel: string; // e.g. "5% after 3 days"
 	joinMessage: string;
+
+	visibility: GroupVisibility;
+	membership: GroupMembership;
+	payoutOrderType: PayoutOrderType;
+	contributionAmount: number;
+	contributionDueInDays: number;
+	payoutRotation: PayoutRotationMember[];
 }
+
+const defaultRotation: PayoutRotationMember[] = [
+	{ id: "m1", name: "Dean Ogude", role: "Organizer", date: "Oct 15", isSelf: true },
+	{ id: "m2", name: "Ademola A.", role: "Member", date: "Nov 15" },
+	{ id: "m3", name: "Henry O.", role: "Member", date: "Dec 15" },
+	{ id: "m4", name: "Funmilayo A.", role: "Member", date: "Jan 15" },
+	{ id: "m5", name: "Chiamaka J.", role: "Member", date: "Feb 15" },
+];
 
 export const circleGroups: CircleGroup[] = [
 	{
@@ -36,6 +66,12 @@ export const circleGroups: CircleGroup[] = [
 		latePenaltyLabel: "5% after 3 days",
 		joinMessage:
 			"Invitation links will be sent once the group is created & finalized, added members will also be notified to confirm their addition.",
+		visibility: "public",
+		membership: "owner",
+		payoutOrderType: "custom",
+		contributionAmount: 250,
+		contributionDueInDays: 3,
+		payoutRotation: defaultRotation,
 	},
 	{
 		id: "circle-2",
@@ -55,6 +91,12 @@ export const circleGroups: CircleGroup[] = [
 		latePenaltyLabel: "3% after 2 days",
 		joinMessage:
 			"Invitation links will be sent once the group is created & finalized, added members will also be notified to confirm their addition.",
+		visibility: "private",
+		membership: "member",
+		payoutOrderType: "manual",
+		contributionAmount: 500,
+		contributionDueInDays: 5,
+		payoutRotation: defaultRotation,
 	},
 	{
 		id: "circle-3",
@@ -74,6 +116,12 @@ export const circleGroups: CircleGroup[] = [
 		latePenaltyLabel: "10% after 1 day",
 		joinMessage:
 			"Invitation links will be sent once the group is created & finalized, added members will also be notified to confirm their addition.",
+		visibility: "private",
+		membership: "owner",
+		payoutOrderType: "custom",
+		contributionAmount: 150,
+		contributionDueInDays: 1,
+		payoutRotation: defaultRotation.slice(0, 3),
 	},
 	{
 		id: "circle-4",
@@ -93,6 +141,12 @@ export const circleGroups: CircleGroup[] = [
 		latePenaltyLabel: "5% after 5 days",
 		joinMessage:
 			"Invitation links will be sent once the group is created & finalized, added members will also be notified to confirm their addition.",
+		visibility: "public",
+		membership: "member",
+		payoutOrderType: "random",
+		contributionAmount: 2500,
+		contributionDueInDays: 12,
+		payoutRotation: defaultRotation,
 	},
 	{
 		id: "circle-5",
@@ -112,6 +166,12 @@ export const circleGroups: CircleGroup[] = [
 		latePenaltyLabel: "2% after 3 days",
 		joinMessage:
 			"Invitation links will be sent once the group is created & finalized, added members will also be notified to confirm their addition.",
+		visibility: "public",
+		membership: "member",
+		payoutOrderType: "vote",
+		contributionAmount: 50,
+		contributionDueInDays: 2,
+		payoutRotation: defaultRotation,
 	},
 	{
 		id: "circle-6",
@@ -131,6 +191,12 @@ export const circleGroups: CircleGroup[] = [
 		latePenaltyLabel: "1% after 1 day",
 		joinMessage:
 			"Invitation links will be sent once the group is created & finalized, added members will also be notified to confirm their addition.",
+		visibility: "public",
+		membership: "owner",
+		payoutOrderType: "manual",
+		contributionAmount: 20,
+		contributionDueInDays: 1,
+		payoutRotation: defaultRotation,
 	},
 	{
 		id: "circle-7",
@@ -150,6 +216,12 @@ export const circleGroups: CircleGroup[] = [
 		latePenaltyLabel: "5% after 3 days",
 		joinMessage:
 			"Invitation links will be sent once the group is created & finalized, added members will also be notified to confirm their addition.",
+		visibility: "public",
+		membership: "none",
+		payoutOrderType: "random",
+		contributionAmount: 300,
+		contributionDueInDays: 7,
+		payoutRotation: defaultRotation,
 	},
 	{
 		id: "circle-8",
@@ -169,6 +241,12 @@ export const circleGroups: CircleGroup[] = [
 		latePenaltyLabel: "5% after 3 days",
 		joinMessage:
 			"Invitation links will be sent once the group is created & finalized, added members will also be notified to confirm their addition.",
+		visibility: "private",
+		membership: "none",
+		payoutOrderType: "manual",
+		contributionAmount: 100,
+		contributionDueInDays: 4,
+		payoutRotation: defaultRotation.slice(0, 4),
 	},
 ];
 
