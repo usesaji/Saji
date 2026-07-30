@@ -1,9 +1,18 @@
+'use client'
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { pageRoutes } from "../../config/routes";
 import { IoIosArrowRoundForward } from "react-icons/io";
-import ActivityCard from "../activity/ActivityCard";
+import ActivityCard, { Transaction } from "../activity/ActivityCard";
+import { mockTransactions } from "../../lib/utils/mock-transactions";
 
 export default function RecentActivities() {
+	const router = useRouter();
+
+	const handleViewDetails = (tx: Transaction) => {
+		router.push(`${pageRoutes.dashboardRoutes.ACTIVITY}?tx=${tx.id}`);
+	};
+
 	return (
 		<section>
 			<div className="mt-7.5 md:mt-10 flex items-center justify-between">
@@ -18,10 +27,9 @@ export default function RecentActivities() {
 			</div>
 
 			<div className="max-md:space-y-2 mt-3.75 lg:mt-6 md:grid md:grid-cols-2 md:gap-3.75">
-				<ActivityCard />
-				<ActivityCard />
-				<ActivityCard />
-				<ActivityCard />
+				{mockTransactions.filter((_, i)=> i < 5  ).map((tx) => (
+					<ActivityCard key={tx.id} tx={tx} onViewDetails={handleViewDetails} />
+				))}
 			</div>
 		</section>
 	);

@@ -16,6 +16,8 @@ export const pageRoutes = {
 
 		ACTIVITY: "/activity",
 		WALLET: "/wallet",
+		WALLET_ADD_MONEY: "/wallet/add-money",
+		WALLET_WITHDRAW: "/wallet/withdraw",
 		ME: "/profile",
 	},
 };

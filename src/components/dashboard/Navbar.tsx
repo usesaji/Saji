@@ -1,15 +1,17 @@
 "use client";
 import { HiOutlinePlusSmall } from "react-icons/hi2";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { navItems } from "../../lib/utils/nav-items";
 import Logo from "../shared/Logo";
 import { Button } from "../ui/button";
+import { pageRoutes } from "../../config/routes";
 // import Image from "next/image";
 // import { pageRoutes } from "../../config/routes";
 
 export default function Navbar() {
 	const pathname = usePathname();
+	const router = useRouter();
 
 	return (
 		<>
@@ -71,7 +73,12 @@ export default function Navbar() {
 							</div>
 						</Link> */}
 						<div className="w-full">
-							<Button className="flex gap-3 w-full">
+							<Button
+								onClick={() =>
+									router.push(pageRoutes.dashboardRoutes.NEW_GROUP)
+								}
+								className="flex gap-3 w-full"
+							>
 								<span>Create Group</span>
 								<HiOutlinePlusSmall className="scale-[1.8]" />
 							</Button>
