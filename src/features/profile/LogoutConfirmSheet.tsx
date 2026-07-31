@@ -2,6 +2,11 @@
 import React from "react";
 import { HiOutlineBookmark } from "react-icons/hi2";
 import { Button } from "../../components/ui/button";
+import {
+	ResponsiveModal,
+	ResponsiveModalDescription,
+	ResponsiveModalTitle,
+} from "../../components/ui/responsive-modal";
 
 interface LogoutConfirmSheetProps {
 	open: boolean;
@@ -18,30 +23,25 @@ export default function LogoutConfirmSheet({
 	onLogoutWithoutSaving,
 	onSaveAndLogout,
 }: LogoutConfirmSheetProps) {
-	if (!open) return null;
-
 	return (
-		<div
-			className="fixed inset-0 z-1100 flex items-end sm:items-center justify-center bg-black/40 px-0 sm:px-4"
-			onClick={onClose}
+		<ResponsiveModal
+			open={open}
+			onOpenChange={(next) => {
+				if (!next && !isLoggingOut) onClose();
+			}}
 		>
-			<div
-				onClick={(e) => e.stopPropagation()}
-				className="bg-white rounded-t-3xl sm:rounded-3xl p-6 pt-3 sm:p-8 w-full max-w-md flex flex-col items-center text-center shadow-xl"
-			>
-				<span className="sm:hidden w-10 h-1.25 rounded-full bg-neutral-light mb-5" />
-
+			<div className="max-w-md mx-auto w-full flex flex-col items-center text-center">
 				<span className="w-16 h-16 rounded-full bg-primary-light flex items-center justify-center">
 					<HiOutlineBookmark className="text-primary text-2xl" />
 				</span>
 
-				<h4 className="text-base md:text-lg font-semibold text-neutral-dark mt-4">
+				<ResponsiveModalTitle className="text-base md:text-lg font-semibold text-neutral-dark mt-4">
 					Do you want to save login?
-				</h4>
-				<p className="text-xs md:text-sm font-light text-neutral-light-active mt-2 leading-relaxed">
+				</ResponsiveModalTitle>
+				<ResponsiveModalDescription className="text-xs md:text-sm font-light text-neutral-light-active mt-2 leading-relaxed">
 					You can save your login information for the next time you need to
 					login so you do not login with a password information.
-				</p>
+				</ResponsiveModalDescription>
 
 				<div className="flex items-center gap-3 mt-6 w-full">
 					<button
@@ -62,6 +62,6 @@ export default function LogoutConfirmSheet({
 					</Button>
 				</div>
 			</div>
-		</div>
+		</ResponsiveModal>
 	);
 }

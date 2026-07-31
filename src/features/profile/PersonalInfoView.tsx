@@ -156,17 +156,11 @@ export default function PersonalInfoView() {
 				</div>
 			</div>
 
-			{editingField && (
-				<EditFieldSheet
-					key={editingField.key}
-					fieldKey={editingField.key}
-					fieldLabel={editingField.label}
-					inputType={editingField.inputType}
-					initialValue={editingField.value}
-					onDiscard={() => setEditingField(null)}
-					onSave={handleSaveField}
-				/>
-			)}
+			<EditFieldSheet
+				field={editingField}
+				onDiscard={() => setEditingField(null)}
+				onSave={handleSaveField}
+			/>
 		</div>
 	);
 }
