@@ -1,5 +1,9 @@
-import React from "react";
+import ProfileView from "../../../features/profile/ProfileView";
 
 export default function Page() {
-	return <div>Profile</div>;
+	return (
+		<div>
+			<ProfileView />
+		</div>
+	);
 }

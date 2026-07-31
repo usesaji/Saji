@@ -21,6 +21,12 @@ export const pageRoutes = {
 		WALLET: "/wallet",
 		WALLET_ADD_MONEY: "/wallet/add-money",
 		WALLET_WITHDRAW: "/wallet/withdraw",
+
 		ME: "/profile",
+		PROFILE_PERSONAL_INFO: "/profile/personal-info",
+		PROFILE_PASSWORD_SECURITY: "/profile/password-security",
+		PROFILE_WITHDRAWAL_INFO: "/profile/withdrawal-info",
+		PROFILE_HELP_SUPPORT: "/profile/help-support",
+		PROFILE_STATEMENT: "/profile/statement",
 	},
 };
