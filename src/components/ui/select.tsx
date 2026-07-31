@@ -255,7 +255,7 @@ function SelectContent({
 			data-slot="select-content"
 			role="listbox"
 			className={cn(
-				"absolute z-50 mt-1 max-h-64 min-w-36 w-max overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 animate-in fade-in-0 zoom-in-95",
+				"absolute z-50 mt-1 max-h-64 min-w-36 w-max overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10 animate-in fade-in-0 zoom-in-95 bg-white",
 				align === "start" && "left-0",
 				align === "end" && "right-0",
 				align === "center" && "left-1/2 -translate-x-1/2",

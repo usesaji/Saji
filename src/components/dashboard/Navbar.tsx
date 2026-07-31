@@ -9,6 +9,13 @@ import { pageRoutes } from "../../config/routes";
 // import Image from "next/image";
 // import { pageRoutes } from "../../config/routes";
 
+// `pathname.includes(href)` would also light up "/wallet" for routes like
+// "/profile/withdrawal-info/wallet-address" since it's a plain substring
+// check — match on the segment boundary instead.
+function isNavItemActive(pathname: string, href: string) {
+	return pathname === href || pathname.startsWith(`${href}/`);
+}
+
 export default function Navbar() {
 	const pathname = usePathname();
 	const router = useRouter();
@@ -24,7 +31,7 @@ export default function Navbar() {
 					<nav className="mt-15 pl-7.5">
 						<ul className="flex justify-between flex-col bg-white gap-10">
 							{navItems.map(({ href, label, Icon }) => {
-								const active = pathname.includes(href);
+								const active = isNavItemActive(pathname, href);
 								return (
 									<li key={href}>
 										<Link href={href} className="flex items-center ">

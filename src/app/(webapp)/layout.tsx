@@ -9,7 +9,7 @@ export default function Layout({
 	children: React.ReactNode;
 }>) {
 	return (
-		<div className="lg:flex lg:overflow-hidden lg:max-h-screen">
+		<div className="lg:flex lg:overflow-clip lg:max-h-screen">
 			<div className="lg:flex-4/12 max-w-65 xl:max-w-70">
 				<Navbar />
 			</div>
