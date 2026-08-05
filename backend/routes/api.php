@@ -7,7 +7,6 @@ use App\Http\Controllers\Auth\OtpController;
 use App\Http\Controllers\ChallengeController;
 use App\Http\Controllers\ContributionController;
 use App\Http\Controllers\DashboardController;
-use App\Http\Controllers\FiatDepositController;
 use App\Http\Controllers\GroupController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PublicCircleController;
@@ -54,6 +53,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/profile', [ProfileController::class, 'show']);
     Route::patch('/profile', [ProfileController::class, 'update']);
     Route::post('/profile/avatar', [ProfileController::class, 'uploadAvatar']);
+    // Link/unlink the user's Stellar wallet (public address only, non-custodial).
+    Route::patch('/profile/wallet', [ProfileController::class, 'linkWallet']);
     Route::post('/profile/password', [ProfileController::class, 'changePassword']);
     Route::patch('/profile/security', [ProfileController::class, 'updateSecurity']);
 
@@ -72,16 +73,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/transactions/statement', [TransactionController::class, 'statement']);
     Route::get('/transactions/{transaction}', [TransactionController::class, 'show']);
 
-    // Wallet (non-custodial): balance, fund info, withdraw, history.
+    // Wallet (non-custodial): balance, withdraw, history. Funding is
+    // connect-wallet + sign (the contract pulls funds directly) — there is no
+    // deposit-address or fiat on-ramp step.
     Route::get('/wallet/balance', [WalletController::class, 'balance']);
-    Route::get('/wallet/fund', [WalletController::class, 'fund']);
-
-    // Fiat deposit via Stellar SEP-24 anchor (non-custodial; wallet signs auth).
-    Route::get('/fiat/deposit/info', [FiatDepositController::class, 'info']);
-    Route::post('/fiat/deposit/challenge', [FiatDepositController::class, 'challenge']);
-    Route::post('/fiat/deposit/start', [FiatDepositController::class, 'start']);
-    Route::get('/fiat/deposit/{transaction}/status', [FiatDepositController::class, 'status']);
+    // "Saji balance": total withdrawable = claimable circle payouts + wallet.
+    Route::get('/wallet/saji-balance', [WalletController::class, 'sajiBalance']);
     Route::post('/wallet/withdraw', [WalletController::class, 'withdraw']);
+    // Log a client-side-broadcast withdrawal (Horizon in the browser).
+    Route::post('/wallet/withdraw/log', [WalletController::class, 'logWithdrawal']);
     Route::post('/wallet/withdraw/submit', [WalletController::class, 'submitWithdraw']);
     Route::get('/wallet/history', [WalletController::class, 'history']);
 
@@ -100,10 +100,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/groups', [GroupController::class, 'store']);
     Route::get('/groups/{group}', [GroupController::class, 'show']);
     Route::get('/groups/{group}/circle', [GroupController::class, 'circle']);
-    Route::get('/groups/{group}/deposit', [GroupController::class, 'depositPage']);
     Route::post('/groups/{group}/photo', [GroupController::class, 'uploadPhoto']);
     // Joining is LINK-ONLY — see /groups/join/{token} below. No join-by-id.
     Route::post('/groups/{group}/members/{member}/approve', [GroupController::class, 'approve']);
+    Route::delete('/groups/{group}/members/{member}', [GroupController::class, 'decline']);
     // Drag-and-drop "who gets paid first": set the manual payout order.
     Route::post('/groups/{group}/payout-order', [GroupController::class, 'setPayoutOrder']);
     // Invite link page: organizer fetches the shareable link; anyone joins by token.
@@ -112,10 +112,18 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/groups/join/{token}', [GroupController::class, 'joinByToken']);
     // Broadcast a wallet-signed tx (create_group / join / contribution) on-chain.
     Route::post('/groups/{group}/submit', [GroupController::class, 'submitOnchain']);
+    // Record the on-chain group id after the frontend created it directly via
+    // the contract bindings (client-side signing).
+    Route::patch('/groups/{group}/onchain', [GroupController::class, 'recordOnchain']);
+    // Mark the group active after the cycle is started on-chain (status sync).
+    Route::post('/groups/{group}/activate', [GroupController::class, 'activate']);
 
     // Contributions
     Route::get('/groups/{group}/contributions', [ContributionController::class, 'index']);
     Route::post('/groups/{group}/contributions', [ContributionController::class, 'store']);
+    // Confirm an on-chain-settled contribution (frontend reports the tx until an
+    // indexer exists): flips pending -> confirmed.
+    Route::post('/groups/{group}/contributions/confirm', [ContributionController::class, 'confirm']);
 
     // Dashboard
     Route::get('/groups/{group}/dashboard', [DashboardController::class, 'show']);

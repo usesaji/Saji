@@ -24,6 +24,7 @@ class TransactionController extends Controller
         $data = $request->validate([
             'type' => ['nullable', 'in:create_group,join,contribution,payout,other'],
             'status' => ['nullable', 'in:pending,success,failed'],
+            'q' => ['nullable', 'string', 'max:100'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
         ]);
 
@@ -32,6 +33,12 @@ class TransactionController extends Controller
             ->with('group:id,name')
             ->when($data['type'] ?? null, fn ($q, $type) => $q->where('type', $type))
             ->when($data['status'] ?? null, fn ($q, $status) => $q->where('status', $status))
+            // Free-text search across the tx type, its hash, and the group name.
+            ->when($data['q'] ?? null, fn ($qb, $term) => $qb->where(function ($w) use ($term) {
+                $w->where('type', 'like', "%{$term}%")
+                    ->orWhere('stellar_tx_hash', 'like', "%{$term}%")
+                    ->orWhereHas('group', fn ($g) => $g->where('name', 'like', "%{$term}%"));
+            }))
             ->latest();
 
         return response()->json(

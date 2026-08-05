@@ -83,8 +83,16 @@ export default function RootLayout({
 	children: React.ReactNode;
 }>) {
 	return (
-		<html lang="en" className={cn("antialiased", dmSans.variable)}>
-			<body className="min-h-full">
+		// suppressHydrationWarning: browser extensions (Grammarly, LanguageTool,
+		// etc.) inject attributes on <html>/<body> before React hydrates, causing
+		// a harmless attribute-mismatch warning. This scopes the suppression to
+		// these two root elements only.
+		<html
+			lang="en"
+			className={cn("antialiased", dmSans.variable)}
+			suppressHydrationWarning
+		>
+			<body className="min-h-full" suppressHydrationWarning>
 				{children}
 				<Toast />
 			</body>

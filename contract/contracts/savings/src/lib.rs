@@ -41,9 +41,15 @@ pub enum PayoutOrder {
     Custom = 3,
 }
 
-/// What happens to a member who misses a contribution. Stored on-chain so the
-/// rule is auditable; enforcement ships with the future `resolve_default` hook
-/// (SPEC §7). The strict "everyone pays" rule still governs the MVP.
+/// What happens to a member who misses a contribution past the grace period.
+/// Both are now enforced by `resolve_default` (organizer-gated):
+///   - `DeductFromBalance`: accrue a late fee (bps of `amount`) that is later
+///     subtracted from the member's own payout and paid to the organizer.
+///   - `RemoveMember`: mark the member defaulted — they are skipped for all
+///     future contributions AND their own payout turn, and whatever they had
+///     already paid into the pool is refunded to their wallet.
+/// `resolve_default` also auto-removes ANY defaulter whose wallet can no longer
+/// cover the contribution, regardless of this setting ("empty wallet ⇒ out").
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[contracttype]
 pub enum LatePenalty {
@@ -90,6 +96,24 @@ pub enum DataKey {
     Contributed(u64, u32, Address),
     /// (group_id, member) -> has this member already received a payout?
     Received(u64, Address),
+    /// (group_id, member) -> has this member defaulted and been removed from the
+    /// rotation? Defaulted members are skipped for contributions and payouts.
+    Defaulted(u64, Address),
+    /// (group_id, member) -> total token amount this member has paid into the
+    /// pool across all cycles, so a removal can refund exactly what they put in.
+    PaidTotal(u64, Address),
+    /// (group_id, member) -> accrued late-fee debt (token stroops) deducted from
+    /// this member's eventual payout and forwarded to the organizer.
+    LateFees(u64, Address),
+    /// (group_id) -> ledger timestamp when the current cycle became due for
+    /// payout tracking. Set on start_cycle and each payout; resolve_default uses
+    /// it with grace_period to decide whether a member is late.
+    CycleStart(u64),
+    /// (group_id, member) -> token amount this member is OWED and can claim.
+    /// Payouts are pull-based: `trigger_payout` records the net here (funds stay
+    /// escrowed in the contract, non-custodial) and the recipient signs
+    /// `claim_payout` to withdraw it to their own wallet.
+    Claimable(u64, Address),
 }
 
 #[contracterror]
@@ -116,9 +140,27 @@ pub enum Error {
     /// set_payout_order was called on a group whose order is Random/Vote/etc.,
     /// where an explicit manual order does not apply.
     OrderNotManual = 13,
+    /// resolve_default was called on a member who is not (or no longer) eligible
+    /// to be defaulted: not a member, already defaulted, or already paid this
+    /// cycle, or the grace period has not yet elapsed.
+    NotDefaultable = 14,
+    /// The group has too many members for a single-transaction payout to stay
+    /// within resource limits (see MAX_MEMBERS).
+    TooManyMembers = 15,
+    /// claim_payout was called by a member who has nothing owed to claim.
+    NothingToClaim = 16,
 }
 
 const BPS_DENOMINATOR: i128 = 10_000;
+
+/// Upper bound on service `fee_bps` (L7): a 10% ceiling stops an organizer from
+/// setting a confiscatory fee that drains the pool to themselves each cycle.
+const MAX_FEE_BPS: u32 = 1_000;
+
+/// Upper bound on members per group (L5): `trigger_payout`/`resolve_default`
+/// iterate the member vec in one transaction, so an unbounded group could
+/// exceed Soroban's resource budget and become un-payable.
+const MAX_MEMBERS: u32 = 100;
 
 // Persistent-storage lifetime. Soroban archives persistent entries once their
 // TTL lapses; an archived group would be unspendable. A savings circle can run
@@ -160,7 +202,9 @@ impl SavingsContract {
         if cycle_length == 0 {
             return Err(Error::InvalidCycleLength);
         }
-        if fee_bps > BPS_DENOMINATOR as u32 || late_fee_bps > BPS_DENOMINATOR as u32 {
+        // Service fee is capped at MAX_FEE_BPS (10%) to prevent a confiscatory
+        // fee; the late fee is a penalty and may range up to 100% of `amount`.
+        if fee_bps > MAX_FEE_BPS || late_fee_bps > BPS_DENOMINATOR as u32 {
             return Err(Error::InvalidFee);
         }
 
@@ -220,6 +264,9 @@ impl SavingsContract {
 
         if members.contains(&member) {
             return Err(Error::AlreadyMember);
+        }
+        if config.member_count >= MAX_MEMBERS {
+            return Err(Error::TooManyMembers);
         }
 
         members.push_back(member.clone());
@@ -309,7 +356,83 @@ impl SavingsContract {
         config.status = Status::Active;
         storage.set(&DataKey::Config(group_id), &config);
         storage.set(&DataKey::Cycle(group_id), &0u32);
+        // Anchor the grace clock for the first cycle.
+        storage.set(&DataKey::CycleStart(group_id), &env.ledger().timestamp());
 
+        env.events().publish(
+            (symbol_short!("cyc_start"), group_id),
+            config.member_count,
+        );
+
+        Self::bump_ttl(&env, group_id);
+        Ok(())
+    }
+
+    /// One-shot launch: admit the full member roster in the chosen payout order
+    /// AND start the first cycle, in a SINGLE organizer-signed transaction. This
+    /// is the "Start Circle" action — instead of admitting each joiner on-chain
+    /// (one signature each) then starting, the organizer accepts members in the
+    /// app (off-chain) and launches everyone at once here.
+    ///
+    /// `order` is the complete rotation: every member (including the organizer)
+    /// exactly once, in payout order (index = payout position). It replaces the
+    /// member list wholesale, so it must:
+    ///   - contain the organizer,
+    ///   - have ≥ 2 entries and ≤ MAX_MEMBERS,
+    ///   - have no duplicates.
+    /// Valid only while the group is still forming (Draft/Open). After this the
+    /// group is Active and the roster/order are locked.
+    pub fn start_with_members(env: Env, group_id: u64, order: Vec<Address>) -> Result<(), Error> {
+        let storage = env.storage().persistent();
+        let mut config = Self::load_config(&env, group_id)?;
+
+        config.organizer.require_auth();
+
+        if config.status != Status::Draft && config.status != Status::Open {
+            return Err(Error::WrongStatus);
+        }
+        if order.len() < 2 {
+            return Err(Error::TooFewMembers);
+        }
+        if order.len() > MAX_MEMBERS {
+            return Err(Error::TooManyMembers);
+        }
+
+        // The organizer must be part of the rotation they're launching.
+        if !order.contains(&config.organizer) {
+            return Err(Error::InvalidOrder);
+        }
+
+        // No duplicates: each address appears exactly once. O(n²) but n is small
+        // (capped at MAX_MEMBERS) and this runs once per group.
+        for a in order.iter() {
+            let mut seen = 0u32;
+            for b in order.iter() {
+                if a == b {
+                    seen += 1;
+                }
+            }
+            if seen != 1 {
+                return Err(Error::InvalidOrder);
+            }
+        }
+
+        // Roster + order become the member vec wholesale; count follows it.
+        config.member_count = order.len();
+        config.status = Status::Active;
+        storage.set(&DataKey::Members(group_id), &order);
+        storage.set(&DataKey::Config(group_id), &config);
+        storage.set(&DataKey::Cycle(group_id), &0u32);
+        storage.set(&DataKey::CycleStart(group_id), &env.ledger().timestamp());
+
+        // One "joined" event per admitted member (skip the organizer, who joined
+        // at creation) so the indexer can mirror membership.
+        for m in order.iter() {
+            if m != config.organizer {
+                env.events()
+                    .publish((symbol_short!("joined"), group_id), m.clone());
+            }
+        }
         env.events().publish(
             (symbol_short!("cyc_start"), group_id),
             config.member_count,
@@ -339,6 +462,10 @@ impl SavingsContract {
         if !members.contains(&member) {
             return Err(Error::NotMember);
         }
+        // A removed (defaulted) member is out of the rotation and cannot pay in.
+        if Self::is_defaulted(&env, group_id, &member) {
+            return Err(Error::NotMember);
+        }
 
         let cycle: u32 = storage.get(&DataKey::Cycle(group_id)).unwrap_or(0);
         let paid_key = DataKey::Contributed(group_id, cycle, member.clone());
@@ -357,6 +484,14 @@ impl SavingsContract {
         storage.set(&paid_key, &true);
         let pool: i128 = storage.get(&DataKey::Pool(group_id)).unwrap_or(0);
         storage.set(&DataKey::Pool(group_id), &(pool + config.amount));
+        // Track lifetime contributions for exact refunds on later removal.
+        let paid_total: i128 = storage
+            .get(&DataKey::PaidTotal(group_id, member.clone()))
+            .unwrap_or(0);
+        storage.set(
+            &DataKey::PaidTotal(group_id, member.clone()),
+            &(paid_total + config.amount),
+        );
 
         env.events().publish(
             (symbol_short!("contrib"), group_id, member),
@@ -369,7 +504,22 @@ impl SavingsContract {
 
     /// Pay the current cycle's recipient. Callable by anyone (e.g. the backend
     /// scheduler) since it can only ever pay the rules-determined recipient.
-    /// Strict rule: reverts unless every member has contributed this cycle.
+    ///
+    /// Strict-but-fair completeness: every member who is still ACTIVE (not
+    /// defaulted) must have paid this cycle. Defaulted members are skipped — the
+    /// organizer removes them via `resolve_default` first, which also refunds
+    /// what they had paid, so their absence never blocks the circle.
+    ///
+    /// The recipient is the next member in rotation order who has NOT already
+    /// received AND is NOT defaulted. Any late-fee debt they accrued is netted
+    /// out of their payout and sent to the organizer.
+    ///
+    /// PULL-BASED: the recipient's net is NOT pushed to their wallet here.
+    /// Instead it is recorded as a claimable balance (funds stay escrowed in the
+    /// contract — non-custodial) and the recipient signs `claim_payout` to
+    /// withdraw it. Only the service/late fee is transferred out immediately, to
+    /// the organizer. This makes the Withdraw/Claim action the way a member
+    /// receives their turn's money, while keeping custody in the contract.
     pub fn trigger_payout(env: Env, group_id: u64) -> Result<(), Error> {
         let storage = env.storage().persistent();
         let mut config = Self::load_config(&env, group_id)?;
@@ -383,8 +533,11 @@ impl SavingsContract {
             .ok_or(Error::GroupNotFound)?;
         let cycle: u32 = storage.get(&DataKey::Cycle(group_id)).unwrap_or(0);
 
-        // Strict completeness: everyone must have paid this cycle.
+        // Completeness over ACTIVE members only (defaulted members are skipped).
         for m in members.iter() {
+            if Self::is_defaulted(&env, group_id, &m) {
+                continue;
+            }
             let paid = storage
                 .get::<DataKey, bool>(&DataKey::Contributed(group_id, cycle, m.clone()))
                 .unwrap_or(false);
@@ -393,38 +546,187 @@ impl SavingsContract {
             }
         }
 
-        // Recipient is the member at this cycle's index in the rotation.
-        let recipient = members.get(cycle).ok_or(Error::GroupNotFound)?;
+        // Recipient: first member in rotation order who is active and not yet
+        // paid. Decoupled from `cycle` as a raw index so skipping a removed
+        // member never mis-assigns or double-pays a slot (invariant #4).
+        let mut recipient: Option<Address> = None;
+        for m in members.iter() {
+            if Self::is_defaulted(&env, group_id, &m) {
+                continue;
+            }
+            let received = storage
+                .get::<DataKey, bool>(&DataKey::Received(group_id, m.clone()))
+                .unwrap_or(false);
+            if !received {
+                recipient = Some(m);
+                break;
+            }
+        }
+        let recipient = recipient.ok_or(Error::WrongStatus)?; // none left ⇒ done
 
         let pool: i128 = storage.get(&DataKey::Pool(group_id)).unwrap_or(0);
-        let fee: i128 = pool * config.fee_bps as i128 / BPS_DENOMINATOR;
+        let service_fee: i128 = pool * config.fee_bps as i128 / BPS_DENOMINATOR;
+        // Late-fee debt this recipient owes, capped so it can never exceed what
+        // they'd receive (never make a payout negative).
+        let owed: i128 = storage
+            .get(&DataKey::LateFees(group_id, recipient.clone()))
+            .unwrap_or(0);
+        let after_service = pool - service_fee;
+        let late_fee = if owed > after_service { after_service } else { owed };
+        let fee: i128 = service_fee + late_fee; // total to organizer
         let net: i128 = pool - fee;
 
         let token_client = token::Client::new(&env, &config.token);
         let contract_addr = env.current_contract_address();
+        // Only the fee leaves now (the organizer's service charge). The
+        // recipient's net stays escrowed and becomes claimable.
         if fee > 0 {
             token_client.transfer(&contract_addr, &config.organizer, &fee);
         }
-        token_client.transfer(&contract_addr, &recipient, &net);
 
-        // Pool is fully disbursed (conservation, invariant #5).
+        // Record the recipient's net as claimable (add to any existing balance so
+        // an unclaimed earlier payout is never lost). Draw it out of the pool.
+        let prev_claim: i128 = storage
+            .get(&DataKey::Claimable(group_id, recipient.clone()))
+            .unwrap_or(0);
+        storage.set(&DataKey::Claimable(group_id, recipient.clone()), &(prev_claim + net));
+
+        // Pool now holds only the escrowed claimable(s); the fee has left and the
+        // net is earmarked. Mark the recipient as having received (their turn is
+        // done in the rotation) and clear their settled late-fee debt.
         storage.set(&DataKey::Pool(group_id), &0i128);
         storage.set(&DataKey::Received(group_id, recipient.clone()), &true);
+        storage.remove(&DataKey::LateFees(group_id, recipient.clone()));
 
         env.events().publish(
             (symbol_short!("payout"), group_id),
             (cycle, recipient, pool, fee, net),
         );
 
-        // Advance rotation. One payout per member => rotation length == members.
-        let next_cycle = cycle + 1;
-        if next_cycle >= config.member_count {
+        // Advance the cycle counter and re-anchor the grace clock. Completion is
+        // decided by whether any ACTIVE member is still waiting to be paid, not
+        // by a raw count — so removals shrink the rotation correctly.
+        storage.set(&DataKey::Cycle(group_id), &(cycle + 1));
+        storage.set(&DataKey::CycleStart(group_id), &env.ledger().timestamp());
+
+        if Self::remaining_recipients(&env, group_id, &members) == 0 {
             config.status = Status::Completed;
             storage.set(&DataKey::Config(group_id), &config);
             env.events()
                 .publish((symbol_short!("grp_done"), group_id), ());
+        }
+
+        Self::bump_ttl(&env, group_id);
+        Ok(())
+    }
+
+    /// Claim a payout that a completed cycle earmarked for the caller. The member
+    /// signs this to pull their owed balance from the contract's escrow to their
+    /// own wallet — the "Withdraw" action for a circle payout. Non-custodial: the
+    /// funds were held by the contract, never by Saji, and only move on the
+    /// recipient's own signature. Returns the claimed amount (stroops).
+    pub fn claim_payout(env: Env, group_id: u64, member: Address) -> Result<i128, Error> {
+        member.require_auth();
+
+        let config = Self::load_config(&env, group_id)?;
+        let storage = env.storage().persistent();
+
+        let amount: i128 = storage
+            .get(&DataKey::Claimable(group_id, member.clone()))
+            .unwrap_or(0);
+        if amount <= 0 {
+            return Err(Error::NothingToClaim);
+        }
+
+        // Transfer the escrowed net from the contract to the claiming member.
+        let token_client = token::Client::new(&env, &config.token);
+        token_client.transfer(&env.current_contract_address(), &member, &amount);
+
+        // Clear the claim so it can't be double-withdrawn.
+        storage.remove(&DataKey::Claimable(group_id, member.clone()));
+
+        env.events().publish(
+            (symbol_short!("claimed"), group_id, member),
+            amount,
+        );
+
+        Self::bump_ttl(&env, group_id);
+        Ok(amount)
+    }
+
+    /// Organizer resolves a member who has missed the current cycle past the
+    /// grace period. Enforces the two-part rule from the product design:
+    ///
+    ///   * If the member's wallet can no longer cover the contribution (empty
+    ///     wallet), they are REMOVED regardless of the group's penalty policy —
+    ///     marked defaulted, skipped in all future cycles and their own payout
+    ///     turn, and everything they had already paid in is REFUNDED to them.
+    ///   * Otherwise, apply the group's `late_penalty`:
+    ///       - `RemoveMember`   → remove + refund (as above).
+    ///       - `DeductFromBalance` → accrue a late fee (bps of `amount`) that is
+    ///         later netted out of the member's own payout to the organizer.
+    ///
+    /// Organizer-gated. Only valid while Active, only when the grace period
+    /// (`cycle_length + grace_period` seconds since the cycle's start) has
+    /// elapsed and the member has NOT paid this cycle.
+    pub fn resolve_default(env: Env, group_id: u64, member: Address) -> Result<(), Error> {
+        let storage = env.storage().persistent();
+        let config = Self::load_config(&env, group_id)?;
+
+        config.organizer.require_auth();
+
+        if config.status != Status::Active {
+            return Err(Error::WrongStatus);
+        }
+
+        let members: Vec<Address> = storage
+            .get(&DataKey::Members(group_id))
+            .ok_or(Error::GroupNotFound)?;
+        if !members.contains(&member) {
+            return Err(Error::NotMember);
+        }
+        // Can't re-default someone already out.
+        if Self::is_defaulted(&env, group_id, &member) {
+            return Err(Error::NotDefaultable);
+        }
+
+        let cycle: u32 = storage.get(&DataKey::Cycle(group_id)).unwrap_or(0);
+        // Only a member who has NOT paid this cycle can be in default.
+        let paid = storage
+            .get::<DataKey, bool>(&DataKey::Contributed(group_id, cycle, member.clone()))
+            .unwrap_or(false);
+        if paid {
+            return Err(Error::NotDefaultable);
+        }
+
+        // Grace clock: the member is only late once cycle_length + grace_period
+        // seconds have passed since this cycle started.
+        let started: u64 = storage.get(&DataKey::CycleStart(group_id)).unwrap_or(0);
+        let deadline = started
+            .saturating_add(config.cycle_length)
+            .saturating_add(config.grace_period);
+        if env.ledger().timestamp() < deadline {
+            return Err(Error::NotDefaultable);
+        }
+
+        // Decide remove vs. late-fee. Empty/insufficient wallet always removes.
+        let token_client = token::Client::new(&env, &config.token);
+        let balance = token_client.balance(&member);
+        let cannot_cover = balance < config.amount;
+
+        if cannot_cover || config.late_penalty == LatePenalty::RemoveMember {
+            Self::remove_member(&env, group_id, &member, &config, &token_client);
         } else {
-            storage.set(&DataKey::Cycle(group_id), &next_cycle);
+            // Accrue a late fee (bps of the contribution amount) as debt.
+            let late = config.amount * config.late_fee_bps as i128 / BPS_DENOMINATOR;
+            let prev: i128 = storage
+                .get(&DataKey::LateFees(group_id, member.clone()))
+                .unwrap_or(0);
+            storage.set(&DataKey::LateFees(group_id, member.clone()), &(prev + late));
+            env.events().publish(
+                (symbol_short!("late_fee"), group_id, member.clone()),
+                (cycle, late),
+            );
         }
 
         Self::bump_ttl(&env, group_id);
@@ -458,14 +760,24 @@ impl SavingsContract {
             .unwrap_or_else(|| Vec::new(&env))
     }
 
-    /// The address that will receive the current cycle's payout.
+    /// The address that will receive the current cycle's payout: the first
+    /// member in rotation order who is active (not defaulted) and has not yet
+    /// received. Mirrors the selection in `trigger_payout`.
     pub fn next_recipient(env: Env, group_id: u64) -> Result<Address, Error> {
         let storage = env.storage().persistent();
         let members: Vec<Address> = storage
             .get(&DataKey::Members(group_id))
             .ok_or(Error::GroupNotFound)?;
-        let cycle: u32 = storage.get(&DataKey::Cycle(group_id)).unwrap_or(0);
-        members.get(cycle).ok_or(Error::GroupNotFound)
+        for m in members.iter() {
+            let received = storage
+                .get::<DataKey, bool>(&DataKey::Received(group_id, m.clone()))
+                .unwrap_or(false);
+            // Defaulted members are marked Received, so this covers both.
+            if !received {
+                return Ok(m);
+            }
+        }
+        Err(Error::GroupNotFound) // no active members left awaiting payout
     }
 
     pub fn has_contributed(env: Env, group_id: u64, cycle: u32, member: Address) -> bool {
@@ -475,6 +787,29 @@ impl SavingsContract {
             .unwrap_or(false)
     }
 
+    /// Whether a member has been removed from the rotation (defaulted).
+    pub fn is_removed(env: Env, group_id: u64, member: Address) -> bool {
+        Self::is_defaulted(&env, group_id, &member)
+    }
+
+    /// Accrued late-fee debt (token stroops) that will be netted out of the
+    /// member's eventual payout.
+    pub fn late_fee_of(env: Env, group_id: u64, member: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::LateFees(group_id, member))
+            .unwrap_or(0)
+    }
+
+    /// Amount (token stroops) this member is owed and can `claim_payout`. 0 means
+    /// nothing to claim. The Withdraw screen reads this to show a claim button.
+    pub fn claimable_of(env: Env, group_id: u64, member: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Claimable(group_id, member))
+            .unwrap_or(0)
+    }
+
     // ---- internal ----
 
     fn load_config(env: &Env, group_id: u64) -> Result<GroupConfig, Error> {
@@ -482,6 +817,74 @@ impl SavingsContract {
             .persistent()
             .get(&DataKey::Config(group_id))
             .ok_or(Error::GroupNotFound)
+    }
+
+    /// Has this member been removed from the rotation?
+    fn is_defaulted(env: &Env, group_id: u64, member: &Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Defaulted(group_id, member.clone()))
+            .unwrap_or(false)
+    }
+
+    /// Mark a member defaulted and refund everything they had paid into the
+    /// pool. Idempotent-safe callers only (guarded by is_defaulted upstream).
+    /// The refund is capped at the current pool so a payout can never be clawed
+    /// back below zero — a member who has already been paid out (Received) has a
+    /// spent contribution and simply forfeits the refund of that portion.
+    fn remove_member(
+        env: &Env,
+        group_id: u64,
+        member: &Address,
+        config: &GroupConfig,
+        token_client: &token::Client,
+    ) {
+        let storage = env.storage().persistent();
+
+        storage.set(&DataKey::Defaulted(group_id, member.clone()), &true);
+
+        // Refund exactly what they paid in, bounded by what the pool still holds.
+        let paid_in: i128 = storage
+            .get(&DataKey::PaidTotal(group_id, member.clone()))
+            .unwrap_or(0);
+        let pool: i128 = storage.get(&DataKey::Pool(group_id)).unwrap_or(0);
+        let refund = if paid_in > pool { pool } else { paid_in };
+        if refund > 0 {
+            token_client.transfer(
+                &env.current_contract_address(),
+                member,
+                &refund,
+            );
+            storage.set(&DataKey::Pool(group_id), &(pool - refund));
+        }
+        // They keep no debt and no future claim.
+        storage.remove(&DataKey::PaidTotal(group_id, member.clone()));
+        storage.remove(&DataKey::LateFees(group_id, member.clone()));
+
+        // A removed member cannot be the awaited recipient, so mark them
+        // Received too — keeps remaining_recipients() and the payout scan honest.
+        storage.set(&DataKey::Received(group_id, member.clone()), &true);
+
+        let _ = config;
+        env.events()
+            .publish((symbol_short!("removed"), group_id), member.clone());
+    }
+
+    /// How many active (non-defaulted) members are still awaiting a payout.
+    fn remaining_recipients(env: &Env, group_id: u64, members: &Vec<Address>) -> u32 {
+        let storage = env.storage().persistent();
+        let mut n = 0u32;
+        for m in members.iter() {
+            let received = storage
+                .get::<DataKey, bool>(&DataKey::Received(group_id, m.clone()))
+                .unwrap_or(false);
+            // Defaulted members are marked Received in remove_member, so this
+            // single check covers both "already paid" and "removed".
+            if !received {
+                n += 1;
+            }
+        }
+        n
     }
 
     /// Keep a group's core keys alive. Called on every state change so an
@@ -495,6 +898,7 @@ impl SavingsContract {
             DataKey::Members(group_id),
             DataKey::Pool(group_id),
             DataKey::Cycle(group_id),
+            DataKey::CycleStart(group_id),
         ] {
             if storage.has(&key) {
                 storage.extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);

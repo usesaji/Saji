@@ -2,15 +2,22 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\SpawnsChainReconcile;
 use App\Models\Contribution;
 use App\Models\Group;
+use App\Services\Stellar\ChainIndexer;
 use App\Services\Stellar\StellarService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class ContributionController extends Controller
 {
-    public function __construct(private readonly StellarService $stellar) {}
+    use SpawnsChainReconcile;
+
+    public function __construct(
+        private readonly StellarService $stellar,
+        private readonly ChainIndexer $indexer,
+    ) {}
 
     /** Contributions the authenticated user has made to a group. */
     public function index(Request $request, Group $group): JsonResponse
@@ -59,17 +66,23 @@ class ContributionController extends Controller
         );
 
         // Non-custodial: the MEMBER's connected wallet signs the on-chain
-        // contribute. Build the unsigned tx for the frontend to sign; it then
-        // posts the signed XDR back to POST /groups/{group}/submit (type
-        // "contribution"), which broadcasts it. The indexer flips this row to
-        // 'confirmed' when the `contributed` event lands. Requires the member to
-        // have linked a wallet and the group to be live on-chain.
+        // contribute. We can optionally build the unsigned tx here (legacy
+        // backend-XDR flow), but the frontend now settles on-chain DIRECTLY via
+        // the contract bindings, so this endpoint's real job is just to record
+        // the intent row. Building the XDR is best-effort — if it fails (e.g. the
+        // host can't reach the RPC), we still return the recorded contribution
+        // rather than 500, and the frontend proceeds with its own signing.
         $unsignedXdr = null;
         if ($user->stellar_address && $group->onchain_group_id !== null) {
-            $unsignedXdr = $this->stellar->buildContributeTx(
-                member: $user->stellar_address,
-                groupId: $group->onchain_group_id,
-            );
+            try {
+                $unsignedXdr = $this->stellar->buildContributeTx(
+                    member: $user->stellar_address,
+                    groupId: $group->onchain_group_id,
+                );
+            } catch (\Throwable $e) {
+                // Non-fatal: the frontend builds + signs the contribution itself.
+                report($e);
+            }
         }
 
         return response()->json([
@@ -77,4 +90,60 @@ class ContributionController extends Controller
             'unsigned_xdr' => $unsignedXdr,
         ], $contribution->wasRecentlyCreated ? 201 : 200);
     }
+
+    /**
+     * Ask the backend to reconcile this group with the chain now (e.g. right
+     * after the member settled a contribution on-chain from the frontend).
+     *
+     * SECURITY: this endpoint does NOT trust the caller's word that they paid.
+     * It triggers the ChainIndexer, which reads the CONTRACT (`has_contributed`)
+     * and only confirms contributions the chain actually shows as paid. So a
+     * member cannot mark themselves paid without a real on-chain transfer — the
+     * chain is the sole authority for `confirmed` state.
+     *
+     * It's just a "reconcile faster than the scheduled run" trigger; the periodic
+     * indexer would reach the same state within a minute regardless.
+     */
+    public function confirm(Request $request, Group $group): JsonResponse
+    {
+        $user = $request->user();
+
+        // Must be an approved member of this group to even ask.
+        abort_unless(
+            $group->members()->where('user_id', $user->id)->where('status', 'approved')->exists(),
+            403,
+            'You are not an approved member of this group.'
+        );
+
+        // Reconcile from chain so the record shows immediately. We try inline
+        // first (works when the host can reach the RPC), but the artisan-serve
+        // web worker often CAN'T resolve DNS to the RPC (the "DNS wall"). So we
+        // ALSO spawn a detached `chain:index --group=` in a standalone php
+        // process, which CAN reach the RPC — it finishes reconciling within a
+        // second or two even if the inline attempt failed. Either way the
+        // request returns right away.
+        if ($group->onchain_group_id !== null) {
+            $reconciled = false;
+            try {
+                $this->indexer->reconcileGroup($group);
+                $reconciled = true;
+            } catch (\Throwable $e) {
+                report($e); // inline read blocked (DNS wall) — the spawn covers it.
+            }
+            // If the inline reconcile couldn't reach the chain, hand off to a
+            // standalone process that can, so the record still lands immediately.
+            if (! $reconciled) {
+                $this->spawnReconcile($group->id);
+            }
+        }
+
+        // Return the member's current-cycle contribution AS THE CHAIN LEFT IT.
+        $contribution = $group->contributions()
+            ->where('user_id', $user->id)
+            ->where('cycle', $group->fresh()->current_cycle)
+            ->first();
+
+        return response()->json($contribution);
+    }
+
 }

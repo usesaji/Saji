@@ -1,15 +1,32 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 import { HiOutlinePlusSmall } from "react-icons/hi2";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { navItems } from "../../lib/utils/nav-items";
 import Logo from "../shared/Logo";
 import { Button } from "../ui/button";
-// import Image from "next/image";
-// import { pageRoutes } from "../../config/routes";
+import { pageRoutes } from "../../config/routes";
+import { useApi } from "../../lib/hooks/useApi";
+import { profile as profileApi, assetUrl } from "../../lib/api";
+
+const AVATAR_PLACEHOLDER = "/images/user.jpg";
+
+/**
+ * A nav item is active when the path IS the item, or is nested UNDER it — but
+ * matched on path segments, not a raw substring. `includes()` was buggy: every
+ * `/groups/*` detail page lit up "Groups" (fine) but `/activity` was shared by
+ * two items, and any accidental string overlap would double-highlight.
+ */
+function isActivePath(pathname: string, href: string): boolean {
+	return pathname === href || pathname.startsWith(href + "/");
+}
 
 export default function Navbar() {
 	const pathname = usePathname();
+
+	// Real profile for the sidebar identity block.
+	const { data: me } = useApi(() => profileApi.show(), []);
 
 	return (
 		<>
@@ -22,7 +39,7 @@ export default function Navbar() {
 					<nav className="mt-15 pl-7.5">
 						<ul className="flex justify-between flex-col bg-white gap-10">
 							{navItems.map(({ href, label, Icon }) => {
-								const active = pathname.includes(href);
+								const active = isActivePath(pathname, href);
 								return (
 									<li key={href}>
 										<Link href={href} className="flex items-center ">
@@ -51,27 +68,28 @@ export default function Navbar() {
 					</nav>
 
 					<div className="flex flex-col items-center pb-10 px-7.5 gap-6.5">
-						{/* <Link
+						<Link
 							href={pageRoutes.dashboardRoutes.ME}
 							className="flex items-center bg-[#f8f8f8] w-full py-[8.5px] px-3.5 rounded-[8.5px] gap-[8.3px]"
 						>
 							<div className="h-12.75 w-12.75 rounded-full overflow-hidden bg-primary items-center justify-center">
-								<Image
+								<img
 									className="h-full w-full object-cover"
-									height={100}
-									width={100}
-									src="/images/user.jpg"
-									alt="User Profile Picture"
+									src={assetUrl(me?.avatar_url, AVATAR_PLACEHOLDER)}
+									alt={me?.name ?? "User Profile Picture"}
 								/>
 							</div>
 
 							<div className="">
-								<h4 className="font-medium">Dean Ogude</h4>
+								<h4 className="font-medium">{me?.name ?? "—"}</h4>
 								<p className="-mt-0.5 text-xs text-[#646464]">View Profile</p>
 							</div>
-						</Link> */}
+						</Link>
 						<div className="w-full">
-							<Button className="flex gap-3 w-full">
+							<Button
+								href={pageRoutes.dashboardRoutes.NEW_GROUP}
+								className="flex gap-3 w-full"
+							>
 								<span>Create Group</span>
 								<HiOutlinePlusSmall className="scale-[1.8]" />
 							</Button>
@@ -85,7 +103,7 @@ export default function Navbar() {
 				<nav className="custom-container py-3.5 sm:py-5">
 					<ul className="flex items-center justify-between">
 						{navItems.map(({ href, label, Icon }) => {
-							const active = pathname.includes(href);
+							const active = isActivePath(pathname, href);
 							return (
 								<li key={href}>
 									<Link

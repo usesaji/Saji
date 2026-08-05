@@ -36,7 +36,8 @@ const MyCircleCard = ({ circle }: MyCircleCardProps) => {
 		memberAvatarsImage,
 	} = circle;
 
-	const progressPercent = Math.min(100, Math.round((current / target) * 100));
+	const progressPercent =
+		target > 0 ? Math.min(100, Math.round((current / target) * 100)) : 0;
 	const progressStyle = getProgressStyle(progressPercent);
 
 	const viewCard = () => {

@@ -95,6 +95,37 @@ class ProfileController extends Controller
         return response()->json($user->fresh());
     }
 
+    /**
+     * Link (or update) the user's Stellar wallet — the PUBLIC address only.
+     *
+     * Non-custodial: we store the G... StrKey the user's connected wallet
+     * reports, never a secret key. This is what every on-chain read/action is
+     * scoped to (balance, contribute, withdraw). Passing null unlinks.
+     */
+    public function linkWallet(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $data = $request->validate([
+            'stellar_address' => [
+                'present', 'nullable', 'string', 'regex:/^G[A-Z2-7]{55}$/',
+                // One wallet per account: reject an address already linked
+                // elsewhere with a clean 422 instead of a DB-level 500.
+                Rule::unique('users', 'stellar_address')->ignore($user->id),
+            ],
+        ], [
+            'stellar_address.regex' => 'That is not a valid Stellar public address.',
+            'stellar_address.unique' => 'That wallet is already linked to another account.',
+        ]);
+
+        $user->update(['stellar_address' => $data['stellar_address']]);
+
+        return response()->json([
+            'stellar_address' => $user->stellar_address,
+            'linked' => (bool) $user->stellar_address,
+        ]);
+    }
+
     /** Profile picture upload. Stores on the public disk, saves the URL. */
     public function uploadAvatar(Request $request): JsonResponse
     {

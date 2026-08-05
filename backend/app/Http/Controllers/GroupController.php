@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\SpawnsChainReconcile;
 use App\Models\Group;
 use App\Models\GroupMember;
 use App\Models\Transaction;
@@ -13,6 +14,8 @@ use Illuminate\Support\Str;
 
 class GroupController extends Controller
 {
+    use SpawnsChainReconcile;
+
     public function __construct(private readonly StellarService $stellar) {}
 
     /** Groups the authenticated user organizes or belongs to. */
@@ -105,20 +108,28 @@ class GroupController extends Controller
         // hand it back for the frontend to sign + submit (see submitOnchain()).
         // Requires both a linked wallet AND a resolvable token address; without
         // a token we'd emit a tx that fails opaquely, so skip and return null.
+        // Best-effort: the frontend now creates the group ON-CHAIN directly via
+        // the contract bindings (then records the id via PATCH .../onchain), so
+        // this XDR is no longer required. Build it if we can, but never let a CLI
+        // /RPC failure 500 the whole create — the DB row must still be returned.
         $unsignedXdr = null;
-        $token = $group->asset_issuer ?: config('services.stellar.usdc_sac');
+        $token = $group->tokenSac();
         if ($user->stellar_address && $token) {
-            $unsignedXdr = $this->stellar->buildCreateGroupTx(
-                organizer: $user->stellar_address,
-                token: $token,
-                amount: $this->toStroops($group->contribution_amount),
-                cycleLength: $group->cycle_length_days * 86_400,
-                feeBps: $group->fee_bps,
-                lateFeeBps: $group->late_fee_bps,
-                gracePeriod: $group->grace_period_hours * 3_600,
-                payoutOrder: $this->payoutOrderVariant($group->payout_order),
-                latePenalty: $this->latePenaltyVariant($group->late_penalty),
-            );
+            try {
+                $unsignedXdr = $this->stellar->buildCreateGroupTx(
+                    organizer: $user->stellar_address,
+                    token: $token,
+                    amount: $this->toStroops($group->contribution_amount),
+                    cycleLength: $group->cycle_length_days * 86_400,
+                    feeBps: $group->fee_bps,
+                    lateFeeBps: $group->late_fee_bps,
+                    gracePeriod: $group->grace_period_hours * 3_600,
+                    payoutOrder: $this->payoutOrderVariant($group->payout_order),
+                    latePenalty: $this->latePenaltyVariant($group->late_penalty),
+                );
+            } catch (\Throwable $e) {
+                report($e); // frontend creates on-chain itself; non-fatal here
+            }
         }
 
         return response()->json([
@@ -163,46 +174,124 @@ class GroupController extends Controller
     }
 
     /**
-     * Circle deposit page: everything needed to make this cycle's contribution
-     * — the user's live wallet balance and the fixed amount to contribute. The
-     * deposit itself is the ordinary contribute flow (POST .../contributions).
+     * Record the on-chain group id after the organizer created the group
+     * DIRECTLY on-chain from the frontend (via the generated contract bindings).
+     *
+     * The frontend signs `create_group` with its wallet, gets back the contract
+     * group id, then calls this to link it to the DB row and mark the group live.
+     * Organizer-only, and one-time (won't overwrite an existing id).
      */
-    public function depositPage(Request $request, Group $group): JsonResponse
+    public function recordOnchain(Request $request, Group $group): JsonResponse
     {
-        $user = $request->user();
+        abort_unless($group->organizer_id === $request->user()->id, 403, 'Only the organizer can activate the group.');
 
-        abort_unless(
-            $group->members()->where('user_id', $user->id)->where('status', 'approved')->exists(),
-            403,
-            'You are not an approved member of this group.'
-        );
+        $data = $request->validate([
+            'onchain_group_id' => ['required', 'integer', 'min:0'],
+            'tx_hash' => ['nullable', 'string', 'max:255'],
+        ]);
 
-        // Live wallet balance (non-custodial read), when a wallet is linked.
-        $walletBalance = null;
-        if ($user->stellar_address) {
-            $token = $group->asset_issuer ?: config('services.stellar.usdc_sac');
-            if ($token) {
-                $stroops = $this->stellar->balanceOf($user->stellar_address, $token);
-                $walletBalance = number_format($stroops / 10_000_000, 7, '.', '');
+        // One-time: don't clobber an already-recorded on-chain id.
+        if ($group->onchain_group_id !== null) {
+            return response()->json([
+                'onchain_group_id' => $group->onchain_group_id,
+                'status' => $group->status,
+                'message' => 'Group is already live on-chain.',
+            ]);
+        }
+
+        // SECURITY: don't trust the client's claimed id. Try to verify it exists
+        // on chain AND that the on-chain organizer matches this organizer's
+        // wallet, so a caller can't link an id that isn't theirs.
+        //
+        // But the read can be UNAVAILABLE from the web worker (e.g. the artisan
+        // serve process can't resolve DNS to the RPC — the "DNS wall"). When the
+        // read simply fails, returning 503 makes the client retry, and each retry
+        // signs a NEW create_group on-chain → duplicate orphan groups. So we
+        // distinguish "read unavailable" (record provisionally; the ChainIndexer,
+        // which runs from a standalone process that CAN reach the RPC, verifies
+        // and corrects it within a minute) from "verified and WRONG" (reject).
+        $organizer = $request->user();
+        $state = null;
+        try {
+            $state = $this->stellar->getGroupState((int) $data['onchain_group_id']);
+        } catch (\Throwable $e) {
+            report($e); // read unavailable — fall through to provisional record.
+        }
+
+        if ($state !== null) {
+            // Read succeeded → enforce the security checks strictly.
+            if (($state['organizer'] ?? null) === null) {
+                return response()->json(['message' => 'That on-chain group does not exist.'], 422);
+            }
+            if ($organizer->stellar_address
+                && $state['organizer'] !== $organizer->stellar_address) {
+                return response()->json(['message' => 'That on-chain group belongs to a different wallet.'], 403);
             }
         }
 
-        $alreadyPaid = $group->contributions()
-            ->where('user_id', $user->id)
-            ->where('cycle', $group->current_cycle)
-            ->whereIn('status', ['pending', 'confirmed'])
-            ->exists();
+        // Link it. When verified, seed status from chain; when only provisional,
+        // leave status as-is and let the indexer reconcile it from the contract.
+        $group->update(array_filter([
+            'onchain_group_id' => $data['onchain_group_id'],
+            'status' => $state !== null
+                ? match ($state['status'] ?? 1) {
+                    0 => 'draft', 2 => 'active', 3 => 'completed', default => 'open',
+                }
+                : null,
+        ], fn ($v) => $v !== null));
+
+        // Log the create_group tx if a hash was supplied.
+        if (! empty($data['tx_hash'])) {
+            Transaction::create([
+                'group_id' => $group->id,
+                'user_id' => $request->user()->id,
+                'type' => 'create_group',
+                'stellar_tx_hash' => $data['tx_hash'],
+                'status' => 'success',
+                'explorer_url' => $this->stellar->explorerUrl($data['tx_hash']),
+            ]);
+        }
+
+        // Pull fresh on-chain state (members/status) into the DB right away.
+        $this->spawnReconcile($group->id);
 
         return response()->json([
-            'group_id' => $group->id,
-            'group_name' => $group->name,
-            'asset_code' => $group->asset_code,
-            'amount_to_contribute' => $group->contribution_amount,
+            'onchain_group_id' => $group->onchain_group_id,
+            'status' => $group->status,
+        ]);
+    }
+
+    /**
+     * Sync the group's status from chain after the organizer started the cycle.
+     *
+     * SECURITY: does not blindly mark the group active on the caller's word — it
+     * reconciles against the CONTRACT via the indexer, so the DB status only
+     * changes to match the chain's real status.
+     */
+    public function activate(Request $request, ChainIndexer $indexer, Group $group): JsonResponse
+    {
+        abort_unless($group->organizer_id === $request->user()->id, 403, 'Only the organizer can start the cycle.');
+
+        if ($group->onchain_group_id !== null) {
+            $reconciled = false;
+            try {
+                $indexer->reconcileGroup($group);
+                $reconciled = true;
+            } catch (\Throwable $e) {
+                report($e);
+            }
+            // Inline read blocked (DNS wall)? Hand off to a standalone process
+            // that CAN reach the RPC, so the status flips within ~2s.
+            if (! $reconciled) {
+                $this->spawnReconcile($group->id);
+            }
+        }
+
+        $group = $group->fresh();
+
+        return response()->json([
+            'status' => $group->status,
             'current_cycle' => $group->current_cycle,
-            'wallet_balance' => $walletBalance,
-            'wallet_linked' => (bool) $user->stellar_address,
-            'already_contributed_this_cycle' => $alreadyPaid,
-            'contribute_endpoint' => "/api/groups/{$group->id}/contributions",
         ]);
     }
 
@@ -229,13 +318,36 @@ class GroupController extends Controller
         $userAim = (float) $group->contribution_amount * max($group->member_count, 1);
         $userProgressPct = $userAim > 0 ? min(100, round($userPaid / $userAim * 100, 2)) : 0;
 
-        // Circle progress: cycles completed out of the full rotation.
+        // Circle progress: a BLENDED figure across the full rotation, so the bar
+        // moves smoothly instead of jumping a whole member's share at a time.
+        //   completed cycles (each = one payout done)  +  the fraction of the
+        //   CURRENT cycle that has been contributed so far, all over the total
+        //   number of cycles (= number of members, one payout each).
+        // e.g. 2 members, cycle 0 paid out, 1 of 2 paid this cycle → (1 + .5)/2
+        //      = 75%. Purely-completed cycles alone would read a coarse 50%.
         $totalCycles = max($group->member_count, 1);
-        $circleProgressPct = round(min($group->current_cycle, $totalCycles) / $totalCycles * 100, 2);
+        $completedCycles = min($group->current_cycle, $totalCycles);
+        // How many active members have already paid the CURRENT cycle.
+        $paidThisCycle = $group->contributions()
+            ->where('cycle', $group->current_cycle)
+            ->where('status', 'confirmed')
+            ->distinct('user_id')
+            ->count('user_id');
+        $currentCycleFraction = $group->member_count > 0
+            ? min(1, $paidThisCycle / $group->member_count)
+            : 0;
+        // Don't let the in-progress cycle push us past 100% once the rotation is
+        // complete (no "current cycle" left to fill).
+        $rawProgress = $completedCycles >= $totalCycles
+            ? $totalCycles
+            : $completedCycles + $currentCycleFraction;
+        $circleProgressPct = round($rawProgress / $totalCycles * 100, 2);
 
-        // Payout rotation: members in payout order with who's already received.
+        // Payout rotation: active members in payout order with who's already
+        // received. Members removed on-chain (defaulted) are flagged, not hidden,
+        // so the circle can see what happened; they carry no rotation position.
         $rotation = $group->members()
-            ->where('status', 'approved')
+            ->whereIn('status', ['approved', 'removed'])
             ->with('user:id,name,stellar_address')
             ->orderBy('payout_position')
             ->get()
@@ -244,6 +356,7 @@ class GroupController extends Controller
                 'user_id' => $m->user_id,
                 'name' => $m->user?->name,
                 'has_received_payout' => (bool) $m->has_received_payout,
+                'removed' => $m->status === 'removed',
             ]);
 
         // Cycle activity: recent on-chain events for this group.
@@ -259,12 +372,20 @@ class GroupController extends Controller
                 'status' => $group->status,
                 'asset_code' => $group->asset_code,
                 'contribution_amount' => $group->contribution_amount,
+                'contribution_frequency' => $group->contribution_frequency,
                 'target_amount' => $group->target_amount,
                 'contract_address' => $group->contract_address,
             ],
             'member_count' => $group->member_count,
             'current_cycle' => $group->current_cycle,
             'total_deposited' => number_format($totalDeposited, 7, '.', ''),
+            // Has the viewer already paid the CURRENT cycle? Drives the "you've
+            // paid this cycle" button state (distinct from lifetime progress).
+            'you_paid_this_cycle' => $group->contributions()
+                ->where('user_id', $user->id)
+                ->where('cycle', $group->current_cycle)
+                ->where('status', 'confirmed')
+                ->exists(),
             'user_progress' => [
                 'paid' => number_format($userPaid, 7, '.', ''),
                 'aim' => number_format($userAim, 7, '.', ''),
@@ -380,22 +501,43 @@ class GroupController extends Controller
         ]);
 
         // Non-custodial: admitting a member on-chain is authorized by the
-        // ORGANIZER's wallet. Build the unsigned join_group tx for the organizer
-        // (this request's user) to sign + submit via submitOnchain().
+        // ORGANIZER's wallet. Best-effort — the frontend now admits on-chain
+        // directly via the contract bindings, so a CLI/RPC failure here must not
+        // 500 the approval (the DB status change above must still succeed).
         $unsignedXdr = null;
         $organizer = $request->user();
         if ($organizer->stellar_address && $group->onchain_group_id !== null && $member->user->stellar_address) {
-            $unsignedXdr = $this->stellar->buildJoinGroupTx(
-                organizer: $organizer->stellar_address,
-                groupId: $group->onchain_group_id,
-                member: $member->user->stellar_address,
-            );
+            try {
+                $unsignedXdr = $this->stellar->buildJoinGroupTx(
+                    organizer: $organizer->stellar_address,
+                    groupId: $group->onchain_group_id,
+                    member: $member->user->stellar_address,
+                );
+            } catch (\Throwable $e) {
+                report($e); // frontend admits on-chain itself; non-fatal
+            }
         }
 
         return response()->json([
             'member' => $member,
             'unsigned_xdr' => $unsignedXdr,
         ]);
+    }
+
+    /**
+     * Organizer declines a PENDING join request. Only pending requests can be
+     * declined (an approved/on-chain member must be removed through a different
+     * flow). Removes the membership row so the request disappears.
+     */
+    public function decline(Request $request, Group $group, GroupMember $member): JsonResponse
+    {
+        abort_unless($group->organizer_id === $request->user()->id, 403, 'Only the organizer can decline requests.');
+        abort_unless($member->group_id === $group->id, 404);
+        abort_unless($member->status === 'pending', 422, 'Only pending requests can be declined.');
+
+        $member->delete();
+
+        return response()->json(['message' => 'Request declined.']);
     }
 
     /**
@@ -452,11 +594,20 @@ class GroupController extends Controller
             // Only build if every member has a linked wallet (else the on-chain
             // permutation would be incomplete and rejected).
             if ($addresses->count() === $submitted->count()) {
-                $unsignedXdr = $this->stellar->buildSetPayoutOrderTx(
-                    organizer: $organizer->stellar_address,
-                    groupId: $group->onchain_group_id,
-                    order: $addresses->all(),
-                );
+                // Best-effort: the frontend now signs set_payout_order DIRECTLY
+                // via the contract bindings (client-side), so this legacy backend
+                // build is optional. If it fails (e.g. the serve worker can't
+                // reach the RPC — the DNS wall), still return the saved positions
+                // rather than 500; the frontend does the on-chain reorder itself.
+                try {
+                    $unsignedXdr = $this->stellar->buildSetPayoutOrderTx(
+                        organizer: $organizer->stellar_address,
+                        groupId: $group->onchain_group_id,
+                        order: $addresses->all(),
+                    );
+                } catch (\Throwable $e) {
+                    report($e); // non-fatal: client-side signing handles it.
+                }
             }
         }
 
@@ -516,26 +667,31 @@ class GroupController extends Controller
     }
 
     /**
-     * Map a stored payout_order value to the exact Soroban `PayoutOrder` enum
-     * variant name the contract expects. Falls back to Manual for anything
-     * unrecognised so we never pass an invalid variant to the CLI.
+     * Map a stored payout_order value to the Soroban `PayoutOrder` enum's
+     * numeric discriminant (Manual=0, Random=1, Vote=2, Custom=3). The contract
+     * declares these as integer-valued enums, and the `stellar` CLI expects the
+     * NUMBER, not the variant name (which its spec-tools can't parse for a
+     * UdtEnum). Falls back to Manual (0) for anything unrecognised.
      */
     private function payoutOrderVariant(?string $order): string
     {
         return match ($order) {
-            'random' => 'Random',
-            'vote' => 'Vote',
-            'custom' => 'Custom',
-            default => 'Manual',
+            'random' => '1',
+            'vote' => '2',
+            'custom' => '3',
+            default => '0', // Manual
         };
     }
 
-    /** Map a stored late_penalty value to the Soroban `LatePenalty` variant. */
+    /**
+     * Map a stored late_penalty value to the `LatePenalty` discriminant
+     * (DeductFromBalance=0, RemoveMember=1). Numeric, per the note above.
+     */
     private function latePenaltyVariant(?string $penalty): string
     {
         return match ($penalty) {
-            'remove_member' => 'RemoveMember',
-            default => 'DeductFromBalance',
+            'remove_member' => '1',
+            default => '0', // DeductFromBalance
         };
     }
 

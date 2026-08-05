@@ -1,12 +1,43 @@
-import Link from "next/link";
 import React from "react";
 import { IoIosArrowRoundForward } from "react-icons/io";
+import type { ActivityRow } from "../../lib/api";
+import { formatMoney } from "../../lib/utils";
 
-const ActivityCard = () => {
+/** Human title for a transaction type. */
+const TYPE_LABELS: Record<ActivityRow["type"], string> = {
+	create_group: "Group Created",
+	join: "Joined Group",
+	contribution: "Contribution",
+	payout: "Payout",
+	other: "Activity",
+};
+
+const STATUS_LABELS: Record<ActivityRow["status"], string> = {
+	pending: "Pending",
+	success: "Completed",
+	failed: "Failed",
+};
+
+function formatTime(iso: string): string {
+	const d = new Date(iso);
+	if (Number.isNaN(d.getTime())) return "";
+	return d.toLocaleString(undefined, {
+		month: "short",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
+	});
+}
+
+const ActivityCard = ({ activity }: { activity: ActivityRow }) => {
+	const title = `${TYPE_LABELS[activity.type]} ${STATUS_LABELS[activity.status]}`;
+	const amount = formatMoney(activity.amount);
+	const groupName = activity.group?.name;
+
 	return (
 		<div className="bg-[#f8f8f8] rounded-xl py-4 px-2 md:py-5 md:px-6">
 			<div className="flex items-start gap-1">
-				<div className="">
+				<div>
 					<svg
 						className="scale-[0.8]"
 						width="48"
@@ -15,12 +46,7 @@ const ActivityCard = () => {
 						fill="none"
 						xmlns="http://www.w3.org/2000/svg"
 					>
-						<rect
-							width="47.0553"
-							height="47.0553"
-							rx="23.5277"
-							fill="#FFE6F3"
-						/>
+						<rect width="47.0553" height="47.0553" rx="23.5277" fill="#FFE6F3" />
 						<path
 							d="M22.6812 13.5006C22.2277 13.3418 21.5917 13.4955 21.2607 13.8436L16.7278 18.6104C16.3968 18.9585 16.496 19.3693 16.9494 19.5282L27.7254 23.3004C28.1789 23.4591 28.8147 23.3056 29.1459 22.9575L33.6788 18.1907C34.0098 17.8424 33.9106 17.4316 33.4572 17.2729L22.6812 13.5006Z"
 							fill="#FF0084"
@@ -32,24 +58,28 @@ const ActivityCard = () => {
 					</svg>
 				</div>
 
-				<div className="">
+				<div>
 					<h5 className="flex gap-3 items-center">
-						<span className="text-sm font-medium">Withdrawal Completed</span>
-						<span className="text-xs">10:23</span>
+						<span className="text-sm font-medium">{title}</span>
+						<span className="text-xs">{formatTime(activity.created_at)}</span>
 					</h5>
 
 					<p className="text-sm text-light leading-[122%] mt-2 md:mt-4">
-						Your group &apos;Summer Funds&apos; has been successfully created.
-						Now, invite your community to start growing together.
+						{amount !== "—" ? `${amount} ` : ""}
+						{groupName ? `in ${groupName}.` : "on your account."}
 					</p>
 
-					<Link
-						href="#"
-						className="flex items-center text-primary mt-2 md:mt-4"
-					>
-						<span className="text-sm">View Transaction</span>
-						<IoIosArrowRoundForward className="text-lg md:text-2xl" />
-					</Link>
+					{activity.explorer_url && (
+						<a
+							href={activity.explorer_url}
+							target="_blank"
+							rel="noreferrer"
+							className="flex items-center text-primary mt-2 md:mt-4"
+						>
+							<span className="text-sm">View Transaction</span>
+							<IoIosArrowRoundForward className="text-lg md:text-2xl" />
+						</a>
+					)}
 				</div>
 			</div>
 		</div>

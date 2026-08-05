@@ -17,15 +17,29 @@ import GoogleAuthBtn from "./GoogleAuthBtn";
 import Link from "next/link";
 import { pageRoutes } from "../../../config/routes";
 import { toast } from "../../../lib/utils/toast";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ApiError, auth, fieldErrors, setToken } from "../../../lib/api";
 
 type SignInValues = z.infer<typeof SignInSchema>;
 
+const GOOGLE_ERRORS: Record<string, string> = {
+	google: "Google sign-in was cancelled or failed. Please try again.",
+	google_no_email: "Google didn't share an email for that account.",
+};
+
 export default function LoginForm() {
 	const [isLoading, setIsLoading] = useState(false);
 	const router = useRouter();
+	const searchParams = useSearchParams();
+
+	// Surface a failed Google redirect (?error=google) as a toast.
+	useEffect(() => {
+		const error = searchParams.get("error");
+		if (error && GOOGLE_ERRORS[error]) {
+			toast.error(GOOGLE_ERRORS[error], "Sign-in Failed");
+		}
+	}, [searchParams]);
 
 	const form = useForm<SignInValues>({
 		resolver: zodResolver(SignInSchema),

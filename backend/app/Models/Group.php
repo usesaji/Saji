@@ -99,4 +99,23 @@ class Group extends Model
     {
         return $this->circle_kind === 'challenge';
     }
+
+    /**
+     * The Stellar Asset Contract address for this group's pool token.
+     *
+     * Resolution order: an explicit per-group asset_issuer, then the configured
+     * SAC for the group's asset_code (USDC/USDT/XLM), then the USDC default.
+     * Without the asset_code lookup an XLM or USDT group would silently get the
+     * USDC SAC — the wrong asset entirely.
+     */
+    public function tokenSac(): ?string
+    {
+        if ($this->asset_issuer) {
+            return $this->asset_issuer;
+        }
+
+        $sacs = (array) config('services.stellar.token_sacs', []);
+
+        return $sacs[$this->asset_code] ?? config('services.stellar.usdc_sac');
+    }
 }

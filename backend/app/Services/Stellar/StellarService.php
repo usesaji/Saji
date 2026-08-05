@@ -30,12 +30,27 @@ class StellarService
     private string $rpcUrl;
     private string $contractId;
     private string $network;
+    private string $networkPassphrase;
+
+    /** Canonical network passphrases (the CLI needs these explicitly). */
+    private const PASSPHRASES = [
+        'testnet' => 'Test SDF Network ; September 2015',
+        'public' => 'Public Global Stellar Network ; September 2015',
+        'futurenet' => 'Test SDF Future Network ; October 2022',
+    ];
 
     public function __construct()
     {
         $this->rpcUrl = (string) config('services.stellar.rpc_url');
         $this->contractId = (string) config('services.stellar.contract_id');
         $this->network = (string) config('services.stellar.network', 'testnet');
+        // The `stellar` CLI's `--network <alias>` only works when that alias is
+        // configured on the host. To be self-contained we pass the passphrase +
+        // RPC URL via env (see stellar()), which the CLI honors without setup.
+        $this->networkPassphrase = (string) (
+            config('services.stellar.network_passphrase')
+                ?: (self::PASSPHRASES[$this->network] ?? self::PASSPHRASES['testnet'])
+        );
     }
 
     /** Build a Stellar explorer link for a tx hash. */
@@ -166,6 +181,18 @@ class StellarService
     }
 
     /**
+     * One non-blocking status check for a tx hash. Returns SUCCESS / FAILED /
+     * NOT_FOUND (still pending or unknown). Used by the indexer to finalize
+     * pending transaction rows without polling.
+     */
+    public function getTransactionStatus(string $hash): string
+    {
+        $res = $this->rpc('getTransaction', ['hash' => $hash]);
+
+        return $res['status'] ?? 'NOT_FOUND';
+    }
+
+    /**
      * Trigger the current cycle's payout. `trigger_payout` needs no user
      * authority (it can only pay the rules-determined recipient), so the
      * backend scheduler signs with its own service account and submits.
@@ -219,6 +246,84 @@ class StellarService
         return (string) $this->readScalar('next_recipient', ['group_id' => (string) $groupId]);
     }
 
+    /**
+     * The on-chain group config as an associative array (status, member_count,
+     * amount, token, …). Used by the indexer to reconcile DB status with the
+     * contract. `status` is the numeric Status enum: 0=Draft,1=Open,2=Active,
+     * 3=Completed.
+     *
+     * @return array<string,mixed>
+     */
+    public function getGroupState(int $groupId): array
+    {
+        $json = $this->readJson('get_group', ['group_id' => (string) $groupId]);
+        $data = json_decode($json, true);
+
+        return is_array($data) ? $data : [];
+    }
+
+    /**
+     * The on-chain member address list for a group, in payout order.
+     *
+     * @return array<int,string>
+     */
+    public function getMembers(int $groupId): array
+    {
+        $json = $this->readJson('get_members', ['group_id' => (string) $groupId]);
+        $data = json_decode($json, true);
+
+        return is_array($data) ? array_values($data) : [];
+    }
+
+    /** Has `member` already paid for `cycle` in this group? */
+    public function hasContributed(int $groupId, int $cycle, string $member): bool
+    {
+        $val = $this->readScalar('has_contributed', [
+            'group_id' => (string) $groupId,
+            'cycle' => (string) $cycle,
+            'member' => $member,
+        ]);
+
+        return $val === 'true' || $val === '1';
+    }
+
+    /** Whether a member has been removed (defaulted) from the rotation. */
+    public function isRemoved(int $groupId, string $member): bool
+    {
+        $val = $this->readScalar('is_removed', [
+            'group_id' => (string) $groupId,
+            'member' => $member,
+        ]);
+
+        return $val === 'true' || $val === '1';
+    }
+
+    /** Accrued late-fee debt (stroops) for a member, netted from their payout. */
+    public function lateFeeOf(int $groupId, string $member): int
+    {
+        $val = $this->readScalar('late_fee_of', [
+            'group_id' => (string) $groupId,
+            'member' => $member,
+        ]);
+
+        return (int) ($val === '' ? '0' : $val);
+    }
+
+    /**
+     * Amount (stroops) a member is owed and can claim from a group — their
+     * completed-cycle payout sitting escrowed in the contract. 0 = nothing to
+     * claim. Backs the "Saji balance" (sum across the user's circles).
+     */
+    public function claimableOf(int $groupId, string $member): int
+    {
+        $val = $this->readScalar('claimable_of', [
+            'group_id' => (string) $groupId,
+            'member' => $member,
+        ]);
+
+        return (int) ($val === '' ? '0' : $val);
+    }
+
     // ------------------------------------------------------------------
     // Wallet (non-custodial): read the user's OWN on-chain balance and build
     // an unsigned withdrawal payment their wallet signs. The backend never
@@ -240,9 +345,13 @@ class StellarService
             throw new RuntimeException('No token address configured to read a balance.');
         }
 
+        // A read still requires a --source-account for the CLI (it simulates the
+        // invocation). For a balance query the account being read is a fine
+        // source — nothing is signed or submitted (--send no).
         $cmd = [
             'contract', 'invoke',
             '--id', $token,
+            '--source-account', $account,
             '--network', $this->network,
             '--send', 'no',
             '--', 'balance',
@@ -330,6 +439,7 @@ class StellarService
         $cmd = [
             'contract', 'invoke',
             '--id', $this->contractId,
+            '--source-account', $this->readSource(),
             '--network', $this->network,
             '--send', 'no',
             '--', $function,
@@ -342,6 +452,48 @@ class StellarService
 
         // The CLI prints the return value as JSON (e.g. "123", "\"GABC...\"").
         return trim($this->stellar($cmd), " \n\r\t\"");
+    }
+
+    /**
+     * Like readScalar but returns the raw JSON output (unstripped), for reads
+     * whose return value is a struct or array (e.g. get_group, get_members).
+     *
+     * @param  array<string,string>  $args
+     */
+    private function readJson(string $function, array $args): string
+    {
+        $this->assertConfigured();
+
+        $cmd = [
+            'contract', 'invoke',
+            '--id', $this->contractId,
+            '--source-account', $this->readSource(),
+            '--network', $this->network,
+            '--send', 'no',
+            '--', $function,
+        ];
+
+        foreach ($args as $name => $value) {
+            $cmd[] = '--'.$name;
+            $cmd[] = $value;
+        }
+
+        return trim($this->stellar($cmd));
+    }
+
+    /**
+     * A source account for read-only (`--send no`) contract simulations. The CLI
+     * requires one even though nothing is signed or submitted. The service secret
+     * works and needs no per-request user; the read reveals nothing about it.
+     */
+    private function readSource(): string
+    {
+        $secret = (string) config('services.stellar.service_secret');
+        if ($secret === '') {
+            throw new RuntimeException('No STELLAR_SERVICE_SECRET set for read simulations.');
+        }
+
+        return $secret;
     }
 
     /** Low-level Soroban JSON-RPC call over HTTP. Returns the `result` object. */
@@ -373,6 +525,13 @@ class StellarService
     {
         $binary = (string) config('services.stellar.cli', 'stellar');
 
+        // Provide network config as CLI flags so the tool doesn't require a
+        // locally configured `--network` alias, and so we don't have to replace
+        // the process environment (which on some hosts drops the system PATH/DNS
+        // resolver config and breaks outbound RPC). We inject the flags right
+        // after the sub-command for any `contract` invocation.
+        $args = $this->withNetworkFlags($args);
+
         $result = Process::timeout(120)->run(array_merge([$binary], $args));
 
         if (! $result->successful()) {
@@ -382,6 +541,39 @@ class StellarService
         }
 
         return $result->output();
+    }
+
+    /**
+     * Replace any `--network <alias>` with explicit `--rpc-url` +
+     * `--network-passphrase` flags. This keeps the CLI self-contained (no host
+     * alias config required) while leaving the real process environment — and
+     * thus PATH/DNS resolution for the outbound RPC — untouched.
+     *
+     * @param  array<int,string>  $args
+     * @return array<int,string>
+     */
+    private function withNetworkFlags(array $args): array
+    {
+        $out = [];
+        for ($i = 0; $i < count($args); $i++) {
+            // Drop the `--network <alias>` pair; we supply passphrase + rpc below.
+            if ($args[$i] === '--network') {
+                $i++; // also skip its value
+
+                continue;
+            }
+            $out[] = $args[$i];
+        }
+
+        // Only network-bound sub-commands (contract invoke, etc.) take these.
+        if (($out[0] ?? null) === 'contract') {
+            array_splice($out, 2, 0, [
+                '--rpc-url', $this->rpcUrl,
+                '--network-passphrase', $this->networkPassphrase,
+            ]);
+        }
+
+        return $out;
     }
 
     private function assertConfigured(): void

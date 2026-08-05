@@ -26,7 +26,11 @@ return [
         env('FRONTEND_URL', 'http://localhost:3000,http://127.0.0.1:3000')
     ))),
 
-    'allowed_origins_patterns' => [],
+    // Allow any VS Code / GitHub dev tunnel origin (used for remote testing),
+    // so the frontend tunnel can call the API without hardcoding its URL.
+    'allowed_origins_patterns' => [
+        '#^https://[a-z0-9-]+\.[a-z0-9-]+\.devtunnels\.ms$#',
+    ],
 
     'allowed_headers' => ['*'],
 

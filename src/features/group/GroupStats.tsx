@@ -1,30 +1,51 @@
 "use client";
 import React, { useState } from "react";
 import { IoEye, IoEyeOff } from "react-icons/io5";
+import { useApi } from "../../lib/hooks/useApi";
+import { dashboard as dashboardApi } from "../../lib/api";
+import { formatMoney } from "../../lib/utils";
 
 export default function GroupStats() {
+	const { data, loading } = useApi(() => dashboardApi.show(), []);
+
+	// Real figures from the user home dashboard. "Total Pending" is the amount
+	// currently due (quick_deposit), which is the only pending figure the
+	// dashboard exposes; falls back to — when nothing is owed.
+	const quickDeposit = data?.quick_deposit as { amount?: string } | null;
+
+	const activeGroups = data?.circles_total ?? 0;
+
 	const stats = [
 		{
-			title: "Total Savings",
-			value: "$24,500,000",
+			title: "Total Saved",
+			value: loading ? "…" : formatMoney(data?.saved_balance),
 			color: "bg-primary",
+			hideable: true,
 		},
 		{
 			title: "Total Pending",
-			value: "$400,000",
+			value: loading ? "…" : formatMoney(quickDeposit?.amount ?? null),
 			color: "bg-accent",
+			hideable: true,
 		},
 		{
 			title: "Active Groups",
-			value: "20",
+			value: loading ? "…" : `${activeGroups} Group${activeGroups === 1 ? "" : "s"}`,
 			color: "bg-secondary-dark",
+			hideable: false,
 		},
 	];
 
 	return (
-		<section className="flex space-x-1.75 md:gap-2.5 mt-5 overflow-x-auto hide-scroll">
+		<section className="mt-5 grid grid-cols-2 gap-2.5 md:grid-cols-3 md:gap-4">
 			{stats.map((s, i) => (
-				<StatsCard key={i} color={s.color} title={s.title} value={s.value} />
+				<StatsCard
+					key={i}
+					color={s.color}
+					title={s.title}
+					value={s.value}
+					hideable={s.hideable}
+				/>
 			))}
 		</section>
 	);
@@ -34,39 +55,34 @@ function StatsCard({
 	color,
 	title,
 	value,
+	hideable = true,
 }: {
 	color: string;
 	title: string;
 	value: string;
+	hideable?: boolean;
 }) {
 	const [view, setView] = useState(true);
 
-	const handleView = () => {
-		setView((prev) => !prev);
-	};
-
 	return (
 		<div
-			className={`${color} text-white rounded-[10.55px] px-3 pt-3 pb-4 md:px-4 md:pt-4 md:pb-5 min-w-50 md:min-w-80 lg:min-w-2/5 min-h-20 md:min-h-25  w-full`}
+			className={`${color} min-h-20 w-full rounded-2xl px-4 pt-3 pb-4 text-white md:min-h-24 md:pt-4 md:pb-5`}
 		>
 			<h5 className="text-xs font-light md:text-sm">{title}</h5>
-			<div className="flex items-center gap-2.5 mt-0.5 min-w-0">
-				{view ? (
-					<h3 className="font-medium text-[22px] truncate max-w-full md:text-[32px] xl:text-[48px]">
-						{value}
-					</h3>
-				) : (
-					<h3 className="font-medium text-[22px] md:text-[36px]">*******</h3>
+			<div className="mt-0.5 flex min-w-0 items-center gap-2">
+				<h3 className="max-w-full truncate text-xl font-medium md:text-2xl xl:text-[28px]">
+					{hideable && !view ? "*******" : value}
+				</h3>
+				{hideable && (
+					<button
+						type="button"
+						onClick={() => setView((v) => !v)}
+						className="text-lg"
+						tabIndex={-1}
+					>
+						{view ? <IoEyeOff /> : <IoEye />}
+					</button>
 				)}
-
-				<button
-					type="button"
-					onClick={handleView}
-					className="text-xl "
-					tabIndex={-1}
-				>
-					{view ? <IoEyeOff /> : <IoEye />}
-				</button>
 			</div>
 		</div>
 	);
