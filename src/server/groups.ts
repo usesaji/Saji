@@ -10,17 +10,24 @@ import { forbidden, notFound } from "./http";
 import { prisma } from "./db";
 
 /**
- * Contract enum ordinals. These MUST match the variant order in the Soroban
- * contract — passing the wrong ordinal silently creates a group with different
- * rules than the user chose, which is far worse than an error.
+ * Contract enum ordinals.
+ *
+ * These MUST match the variant order in the Soroban contract — passing the
+ * wrong ordinal silently creates a group with different rules than the user
+ * chose, which is far worse than an error. The authority is the generated
+ * bindings in `src/lib/contract/savings/src/index.ts`; do not reorder these
+ * without re-reading that file.
+ *
+ * PayoutOrder: Manual=0, Random=1, Vote=2, Custom=3.
  */
 export const PAYOUT_ORDER_VARIANT: Record<string, number> = {
-	random: 0,
-	manual: 1,
+	manual: 0,
+	random: 1,
 	vote: 2,
 	custom: 3,
 };
 
+/** LatePenalty: DeductFromBalance=0, RemoveMember=1. */
 export const LATE_PENALTY_VARIANT: Record<string, number> = {
 	deduct_from_balance: 0,
 	remove_member: 1,

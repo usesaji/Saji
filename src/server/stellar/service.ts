@@ -358,12 +358,46 @@ export async function buildCreateGroupTx(
 	]);
 }
 
-/** Unsigned `join_group`, for the joining member's wallet to sign. */
+/**
+ * Unsigned `join_group` — admits `member` to a group.
+ *
+ * The ORGANIZER signs this, not the member: admitting someone is the
+ * organizer's authority, and the member being admitted is a separate argument.
+ * Passing the member as the source account would build a transaction the
+ * contract rejects.
+ */
 export async function buildJoinGroupTx(
+	organizer: string,
+	groupId: number | bigint,
 	member: string,
+): Promise<string> {
+	return buildUnsigned(organizer, "join_group", [u64(groupId), addr(member)]);
+}
+
+/**
+ * Unsigned `start_cycle` — locks the rotation and starts cycle 0.
+ * Organizer signs.
+ */
+export async function buildStartCycleTx(
+	organizer: string,
 	groupId: number | bigint,
 ): Promise<string> {
-	return buildUnsigned(member, "join_group", [u64(groupId), addr(member)]);
+	return buildUnsigned(organizer, "start_cycle", [u64(groupId)]);
+}
+
+/**
+ * Unsigned `set_payout_order` — freezes the rotation order on-chain.
+ * Organizer signs.
+ */
+export async function buildSetPayoutOrderTx(
+	organizer: string,
+	groupId: number | bigint,
+	members: string[],
+): Promise<string> {
+	return buildUnsigned(organizer, "set_payout_order", [
+		u64(groupId),
+		nativeToScVal(members.map((m) => new Address(m))),
+	]);
 }
 
 /** Unsigned `contribute`, for the contributing member's wallet to sign. */

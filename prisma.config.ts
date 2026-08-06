@@ -22,6 +22,12 @@ export default defineConfig({
 		path: "prisma/migrations",
 	},
 	datasource: {
-		url: env("DATABASE_URL"),
+		// Migrations run against the SESSION-mode pooler (port 5432). The
+		// transaction-mode pooler on 6543 multiplexes connections and cannot
+		// hold the session state that CREATE TABLE / ALTER TYPE require, so
+		// schema changes issued through it fail or silently misbehave.
+		//
+		// Falls back to DATABASE_URL for setups with a single direct connection.
+		url: env("DIRECT_URL") ?? env("DATABASE_URL"),
 	},
 });

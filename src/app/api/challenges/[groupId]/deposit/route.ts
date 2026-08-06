@@ -1,0 +1,67 @@
+/**
+ * Record a save a member made toward the challenge target.
+ *
+ * Ported from `ChallengeController::deposit`.
+ *
+ * Non-custodial: the funds moved within the member's OWN control. We store the
+ * backing on-chain tx hash so progress is verifiable rather than self-asserted,
+ * and the row stays 'pending' until the indexer sees that tx confirmed.
+ */
+
+import { z } from "zod";
+import { prisma } from "@/server/db";
+import { requireUser } from "@/server/auth";
+import { handle, json, parseBody, validationError } from "@/server/http";
+import { findGroupOr404 } from "@/server/groups";
+import { assertChallengeMember } from "@/server/challenges";
+
+const schema = z.object({
+	amount: z.union([
+		z
+			.string()
+			.regex(/^\d+(\.\d{1,7})?$/, "Must be a number with at most 7 decimals"),
+		z.number().positive(),
+	]),
+	// Required: a challenge save must correspond to real on-chain movement.
+	stellar_tx_hash: z.string().min(1).max(255),
+});
+
+export async function POST(
+	request: Request,
+	{ params }: { params: Promise<{ groupId: string }> },
+) {
+	return handle(async () => {
+		const user = await requireUser(request);
+		const { groupId } = await params;
+
+		const group = await findGroupOr404(groupId);
+		await assertChallengeMember(group, user.id);
+
+		const data = await parseBody(request, schema);
+
+		// The hash is UNIQUE in the schema, so the database is the real guard
+		// against counting one transfer twice. Check first to return a clean
+		// 422 rather than a constraint violation.
+		const duplicate = await prisma.challengeDeposit.findUnique({
+			where: { stellarTxHash: data.stellar_tx_hash },
+		});
+
+		if (duplicate) {
+			throw validationError({
+				stellar_tx_hash: ["That transaction has already been recorded."],
+			});
+		}
+
+		const deposit = await prisma.challengeDeposit.create({
+			data: {
+				groupId: group.id,
+				userId: user.id,
+				amount: String(data.amount),
+				stellarTxHash: data.stellar_tx_hash,
+				status: "pending",
+			},
+		});
+
+		return json(deposit, 201);
+	});
+}
