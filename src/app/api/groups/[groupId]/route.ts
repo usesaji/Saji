@@ -7,7 +7,7 @@
 import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json } from "@/server/http";
-import { assertMember, findGroupOr404 } from "@/server/groups";
+import { assertVisible, findGroupOr404 } from "@/server/groups";
 
 export async function GET(
 	request: Request,
@@ -18,7 +18,7 @@ export async function GET(
 		const { groupId } = await params;
 
 		const group = await findGroupOr404(groupId);
-		await assertMember(group, user.id);
+		await assertVisible(group, user.id);
 
 		const members = await prisma.groupMember.findMany({
 			where: { groupId: group.id },

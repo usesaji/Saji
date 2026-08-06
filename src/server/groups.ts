@@ -91,19 +91,60 @@ export function assertOrganizer(group: Group, userId: bigint): void {
 	}
 }
 
-/** Assert the user organizes or belongs to this group. */
-export async function assertMember(
+/**
+ * Can this user see the group's private detail — finances, member roster
+ * (names + Stellar addresses), and the invite token?
+ *
+ * Ported from `Group::isVisibleTo`. Challenges and public circles are open to
+ * everyone. Otherwise: the organizer, plus anyone with a live membership.
+ *
+ * PENDING requesters are deliberately included — they need to see what they
+ * asked to join. Declined and removed members are not.
+ */
+export async function isVisibleTo(
 	group: Group,
 	userId: bigint,
-): Promise<void> {
-	if (group.organizerId === userId) return;
+): Promise<boolean> {
+	if (group.circleKind === "challenge" || group.groupType === "public") {
+		return true;
+	}
+
+	if (group.organizerId === userId) return true;
 
 	const membership = await prisma.groupMember.findUnique({
 		where: { groupId_userId: { groupId: group.id, userId } },
 	});
 
-	if (!membership || membership.status === "removed") {
-		throw forbidden("You are not a member of this circle.");
+	return (
+		membership !== null &&
+		(membership.status === "approved" || membership.status === "pending")
+	);
+}
+
+/** Assert the user can see this group, or 403. */
+export async function assertVisible(
+	group: Group,
+	userId: bigint,
+): Promise<void> {
+	if (!(await isVisibleTo(group, userId))) {
+		throw forbidden("You are not a member of this group.");
+	}
+}
+
+/**
+ * Assert the user is an APPROVED member — the bar for acting on a group
+ * (contributing, depositing), which is stricter than merely seeing it.
+ */
+export async function assertApprovedMember(
+	group: Group,
+	userId: bigint,
+): Promise<void> {
+	const membership = await prisma.groupMember.findUnique({
+		where: { groupId_userId: { groupId: group.id, userId } },
+	});
+
+	if (!membership || membership.status !== "approved") {
+		throw forbidden("You are not an approved member of this group.");
 	}
 }
 

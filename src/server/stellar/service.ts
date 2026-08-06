@@ -275,6 +275,44 @@ export async function getTokenBalance(
 }
 
 /**
+ * What `member` can currently claim from a group's escrow, in stroops.
+ *
+ * Non-custodial: these funds sit in the CONTRACT, not with Saji. Returns 0 when
+ * the contract has nothing recorded for this member.
+ */
+export async function claimableOf(
+	groupId: number | bigint,
+	member: string,
+): Promise<bigint> {
+	const value = await simulate<bigint | null>("claimable_of", [
+		u64(groupId),
+		addr(member),
+	]);
+
+	return value === null ? 0n : BigInt(value);
+}
+
+/**
+ * Every asset the app supports, mapped to its token contract (SAC) address.
+ *
+ * Assets with no configured SAC are OMITTED rather than defaulted — reading a
+ * balance against the wrong token contract returns a confidently wrong number.
+ */
+export function tokenSacs(): Record<string, string> {
+	const configured: Record<string, string | undefined> = {
+		XLM: process.env.STELLAR_XLM_SAC,
+		USDC: process.env.STELLAR_USDC_SAC,
+		USDT: process.env.STELLAR_USDT_SAC,
+	};
+
+	return Object.fromEntries(
+		Object.entries(configured).filter(
+			(entry): entry is [string, string] => Boolean(entry[1]),
+		),
+	);
+}
+
+/**
  * Non-blocking status check for a tx hash: SUCCESS / FAILED / NOT_FOUND.
  * NOT_FOUND means still pending or unknown — the indexer treats it as pending.
  */
