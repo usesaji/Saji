@@ -34,7 +34,7 @@ if (typeof window !== "undefined") {
 export const networks = {
   testnet: {
     networkPassphrase: "Test SDF Network ; September 2015",
-    contractId: "CBK6LNFWWSKVYHVETO4FKX74JYKH22YMZBSF7CCQ6HK72AO7XS4HDLV2",
+    contractId: "CA3YEH744GMHOKALGS4YXFYXF3LT6XEPL5EPUF6DDWBJC2IDOFTT5LVT",
   }
 } as const
 
@@ -223,13 +223,19 @@ export interface Client {
 
   /**
    * Construct and simulate a claim_payout transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
-   * Claim a payout that a completed cycle earmarked for the caller. The member
-   * signs this to pull their owed balance from the contract's escrow to their
-   * own wallet — the "Withdraw" action for a circle payout. Non-custodial: the
-   * funds were held by the contract, never by Saji, and only move on the
-   * recipient's own signature. Returns the claimed amount (stroops).
+   * Claim a payout that a completed cycle earmarked for `member`, sending it to
+   * `to` — the "Withdraw" action for a circle payout. Non-custodial: the funds
+   * were held by the contract, never by Saji, and only move on the member's own
+   * signature, so naming a destination is the member's choice alone. `to` is
+   * unrestricted (it may equal `member`) — that's what lets a member withdraw
+   * straight to any wallet they choose, with no hop through their own account.
+   *
+   * If `to` holds no trustline for the group's token the transfer reverts and
+   * the payout stays claimable — check before calling.
+   *
+   * Returns the claimed amount (stroops).
    */
-  claim_payout: ({group_id, member}: {group_id: u64, member: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<i128>>>
+  claim_payout: ({group_id, member, to}: {group_id: u64, member: string, to: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<i128>>>
 
   /**
    * Construct and simulate a create_group transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.

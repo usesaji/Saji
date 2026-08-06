@@ -270,19 +270,25 @@ export function useSavingsContract() {
 	);
 
 	/**
-	 * Claim a completed-cycle payout the contract earmarked for the caller. The
-	 * member signs; the escrowed net moves from the contract to their wallet.
-	 * Returns the claimed amount (stroops). This is the on-chain half of the
-	 * "Saji balance → my wallet" withdrawal.
+	 * Claim a completed-cycle payout the contract earmarked for the caller,
+	 * sending it to `to`. The member signs; the escrowed net moves from the
+	 * contract straight to that address — no hop through the member's own
+	 * wallet, so a withdrawal to a saved destination is ONE signature.
+	 *
+	 * `to` defaults to the member's own address (claim it home). It must hold a
+	 * trustline for the group's token or the claim reverts; check before calling.
+	 *
+	 * Returns the claimed amount (stroops).
 	 */
 	const claimPayout = useCallback(
-		async (onchainGroupId: bigint | number): Promise<bigint> => {
+		async (onchainGroupId: bigint | number, to?: string): Promise<bigint> => {
 			const member = await requireAddress();
 			const client = savingsClient(member);
 
 			const tx = await client.claim_payout({
 				group_id: BigInt(onchainGroupId),
 				member,
+				to: to ?? member,
 			});
 			const sent = await tx.signAndSend();
 			const result = sent.result;

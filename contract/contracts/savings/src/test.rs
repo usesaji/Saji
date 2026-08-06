@@ -96,7 +96,7 @@ fn full_cycle_pays_recipient_with_fee() {
     assert_eq!(s.client.get_pool(&group_id), 0);
 
     // The recipient claims → net moves to their wallet, claimable clears.
-    let claimed = s.client.claim_payout(&group_id, &recipient);
+    let claimed = s.client.claim_payout(&group_id, &recipient, &recipient);
     assert_eq!(claimed, net);
     assert_eq!(s.token_client.balance(&recipient), recipient_before + fee + net);
     assert_eq!(s.client.claimable_of(&group_id, &recipient), 0);
@@ -200,7 +200,7 @@ fn claim_without_a_payout_reverts() {
     let (group_id, _org, members) = active_group(&s, 2, amount, 0);
     // m2 has never been paid out → nothing to claim.
     let m2 = members.get(1).unwrap();
-    s.client.claim_payout(&group_id, &m2);
+    s.client.claim_payout(&group_id, &m2, &m2);
 }
 
 #[test]
@@ -215,13 +215,67 @@ fn double_claim_reverts_second_time() {
     s.client.trigger_payout(&group_id);
 
     // First claim succeeds and moves the funds.
-    let claimed = s.client.claim_payout(&group_id, &recipient);
+    let claimed = s.client.claim_payout(&group_id, &recipient, &recipient);
     assert_eq!(claimed, amount * 2);
     assert_eq!(s.client.claimable_of(&group_id, &recipient), 0);
 
     // Second claim finds nothing → typed error (no double-withdraw).
-    let res = s.client.try_claim_payout(&group_id, &recipient);
+    let res = s.client.try_claim_payout(&group_id, &recipient, &recipient);
     assert_eq!(res, Err(Ok(Error::NothingToClaim)));
+
+    // …and naming a DIFFERENT destination doesn't resurrect it. The claimable
+    // entry is keyed on the member, so a fresh `to` is not a fresh claim.
+    let elsewhere = s.funded_member(0);
+    let res = s.client.try_claim_payout(&group_id, &recipient, &elsewhere);
+    assert_eq!(res, Err(Ok(Error::NothingToClaim)));
+    assert_eq!(s.token_client.balance(&elsewhere), 0);
+}
+
+#[test]
+fn claim_pays_a_third_party_address() {
+    let s = setup();
+    let amount = 10_000_000i128;
+    let (group_id, _org, members) = active_group(&s, 2, amount, 0);
+    for m in members.iter() {
+        s.client.contribute(&group_id, &m);
+    }
+    let recipient = s.client.next_recipient(&group_id);
+    s.client.trigger_payout(&group_id);
+
+    // An external wallet the member wants paid — not a circle member.
+    let destination = s.funded_member(0);
+    let recipient_before = s.token_client.balance(&recipient);
+
+    let claimed = s.client.claim_payout(&group_id, &recipient, &destination);
+
+    // The whole payout lands at the destination…
+    assert_eq!(claimed, amount * 2);
+    assert_eq!(s.token_client.balance(&destination), amount * 2);
+    // …and never touches the member's own wallet.
+    assert_eq!(s.token_client.balance(&recipient), recipient_before);
+    // The claim is settled and can't be replayed.
+    assert_eq!(s.client.claimable_of(&group_id, &recipient), 0);
+}
+
+#[test]
+fn claim_to_self_still_works() {
+    // Regression guard: `to == member` must behave exactly as before the
+    // destination parameter existed.
+    let s = setup();
+    let amount = 10_000_000i128;
+    let (group_id, _org, members) = active_group(&s, 2, amount, 0);
+    for m in members.iter() {
+        s.client.contribute(&group_id, &m);
+    }
+    let recipient = s.client.next_recipient(&group_id);
+    let before = s.token_client.balance(&recipient);
+    s.client.trigger_payout(&group_id);
+
+    let claimed = s.client.claim_payout(&group_id, &recipient, &recipient);
+
+    assert_eq!(claimed, amount * 2);
+    assert_eq!(s.token_client.balance(&recipient), before + amount * 2);
+    assert_eq!(s.client.claimable_of(&group_id, &recipient), 0);
 }
 
 #[test]
@@ -510,8 +564,8 @@ fn resolve_default_removes_empty_wallet_member_and_refunds_the_rest() {
 
     // Pull-based: the two payouts are held as claimable in the contract until the
     // recipients claim. After both claim, the contract's token balance is 0.
-    s.client.claim_payout(&group_id, &organizer);
-    s.client.claim_payout(&group_id, &m2);
+    s.client.claim_payout(&group_id, &organizer, &organizer);
+    s.client.claim_payout(&group_id, &m2, &m2);
     assert_eq!(s.token_client.balance(&s.client.address), 0);
 }
 
@@ -558,8 +612,8 @@ fn resolve_default_refunds_a_removed_member_their_past_contributions() {
     assert_eq!(s.client.get_group(&group_id).status, Status::Completed);
 
     // Both cycle payouts are held claimable; once claimed, contract balance is 0.
-    s.client.claim_payout(&group_id, &organizer);
-    s.client.claim_payout(&group_id, &m2);
+    s.client.claim_payout(&group_id, &organizer, &organizer);
+    s.client.claim_payout(&group_id, &m2, &m2);
     assert_eq!(s.token_client.balance(&s.client.address), 0);
 }
 
@@ -663,6 +717,6 @@ fn zero_fee_gives_whole_pool_to_recipient() {
     assert_eq!(s.client.claimable_of(&group_id, &recipient), amount * 2);
     assert_eq!(s.token_client.balance(&recipient), before);
     // After claiming, the whole pool is in their wallet.
-    s.client.claim_payout(&group_id, &recipient);
+    s.client.claim_payout(&group_id, &recipient, &recipient);
     assert_eq!(s.token_client.balance(&recipient), before + amount * 2);
 }

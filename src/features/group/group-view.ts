@@ -16,6 +16,34 @@ const PLACEHOLDER_THUMB = "/images/about/backed.svg";
 const PLACEHOLDER_BANNER = "/images/group-test-img.png";
 const PLACEHOLDER_AVATARS = "/images/review-user-imgs.png";
 
+/**
+ * Contribution frequency → cycle length in days, for the contract's
+ * `cycle_length`. One definition shared by both on-chain create paths (the
+ * create-group form and the group page's "activate on-chain") so a circle can
+ * never be written to the contract with a length that contradicts its label.
+ *
+ * This does NOT drive payouts — a cycle ends when every active member has
+ * contributed, not on a timer. It sets when a contribution is DUE, which is
+ * what `grace_period` is measured from and therefore what decides whether a
+ * member counts as late (`resolve_default`).
+ *
+ * `custom` has no fixed length; callers pass the group's `cycle_length_days`.
+ */
+const FREQUENCY_DAYS: Record<string, number> = {
+	daily: 1,
+	weekly: 7,
+	bi_weekly: 14,
+	monthly: 30,
+};
+
+export function cycleDaysFor(
+	frequency: string | null | undefined,
+	customDays?: string | number | null,
+): number {
+	if (frequency === "custom") return Number(customDays) || 1;
+	return FREQUENCY_DAYS[frequency ?? ""] ?? 7;
+}
+
 /** Title-case a backend snake_case enum value, e.g. "bi_weekly" → "Bi Weekly". */
 export function labelize(value?: string | null): string {
 	if (!value) return "—";

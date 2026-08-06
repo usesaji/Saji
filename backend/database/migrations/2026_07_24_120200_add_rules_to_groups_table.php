@@ -10,11 +10,16 @@ return new class extends Migration
      * Create Group + Group Rules screens.
      *
      * Split by trust boundary:
-     *  - ON-CHAIN mirror (enforced by the Soroban contract): target_amount,
-     *    late_fee_bps, grace_period_hours, payout_order. `fee_bps` (service
-     *    charge per contribution) already exists.
+     *  - ON-CHAIN mirror (enforced by the Soroban contract): late_fee_bps,
+     *    grace_period_hours, payout_order. `fee_bps` (service charge per
+     *    contribution) already exists.
      *  - OFF-CHAIN (UX/metadata only, safe to keep in the DB): photo_url,
-     *    contribution_frequency, auto_approve_join, hide_balances, invite_token.
+     *    target_amount, contribution_frequency, auto_approve_join,
+     *    hide_balances, invite_token.
+     *
+     * NOTE: target_amount is display-only — it is never sent to the contract
+     * and nothing enforces it. contribution_frequency is also off-chain, but it
+     * DERIVES the contract's `cycle_length` at creation (see cycleDaysFor).
      */
     public function up(): void
     {

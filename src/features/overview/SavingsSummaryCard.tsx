@@ -40,7 +40,10 @@ export default function SavingsSummaryCard({ data }: { data: DashboardData }) {
 			<div className="rounded-[20px] bg-primary p-5 text-white md:p-6">
 				<div className="flex items-start justify-between gap-4">
 					<div className="min-w-0">
-						<p className="text-[10px] md:text-sm">Total Group Savings</p>
+						{/* NOT the withdrawable balance — this is contributed minus what
+						    has rotated back, so it goes DOWN on a payout. The Saji Balance
+						    card on the wallet page owns "what can I withdraw". */}
+						<p className="text-[10px] md:text-sm">Saving in Circles</p>
 						<div className="mt-1 flex items-center gap-2.5">
 							<h3 className="truncate text-[32px] font-medium md:text-[44px]">
 								{hidden ? "*******" : formatMoney(data.saved_balance)}
@@ -54,6 +57,9 @@ export default function SavingsSummaryCard({ data }: { data: DashboardData }) {
 								{hidden ? <IoEyeOff /> : <IoEye />}
 							</button>
 						</div>
+						<p className="mt-1 text-[10px] font-light text-white/80 md:text-xs">
+							Your contributions still working in your circles
+						</p>
 						{/* Member/people count across the user's circles. */}
 						<div className="mt-2 flex items-center gap-2">
 							<div className="h-6">

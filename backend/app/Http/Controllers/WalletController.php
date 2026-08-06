@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Group;
+use App\Models\Payout;
 use App\Models\Transaction;
 use App\Services\Stellar\StellarService;
 use Illuminate\Http\JsonResponse;
@@ -134,6 +135,34 @@ class WalletController extends Controller
     }
 
     /**
+     * The user's live on-chain circles (pure DB — no RPC), so the FRONTEND can
+     * read each circle's claimable payout directly from the chain. This exists
+     * because the sajiBalance RPC reads fail from the artisan-serve web worker
+     * (the DNS wall) and return 0; the browser reaches the RPC fine, so it reads
+     * the real claimable amounts itself using this list.
+     */
+    public function myCircles(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $circles = Group::query()
+            ->whereNotNull('onchain_group_id')
+            ->whereHas('members', fn ($q) => $q->where('user_id', $user->id)->where('status', 'approved'))
+            ->get(['id', 'name', 'onchain_group_id', 'asset_code'])
+            ->map(fn ($g) => [
+                'group_id' => $g->id,
+                'onchain_group_id' => (int) $g->onchain_group_id,
+                'group_name' => $g->name,
+                'asset_code' => $g->asset_code,
+            ]);
+
+        return response()->json([
+            'stellar_address' => $user->stellar_address,
+            'circles' => $circles,
+        ]);
+    }
+
+    /**
      * "Withdraw": build an unsigned payment from the user's wallet to a
      * destination. The user's wallet signs it; then the signed XDR is posted to
      * submitWithdraw() to broadcast. Defaults the destination to the user's
@@ -230,17 +259,23 @@ class WalletController extends Controller
     public function logWithdrawal(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'tx_hash' => ['required', 'string', 'max:255'],
+            // Nullable: a payout claimed STRAIGHT to the destination is settled by
+            // the contract call itself, so the client has no separate payment hash.
+            'tx_hash' => ['nullable', 'string', 'max:255'],
             'amount' => ['required', 'numeric', 'min:0.0000001'],
             'asset_code' => ['nullable', 'string', 'max:12'],
         ]);
 
+        $hash = $data['tx_hash'] ?? null;
+
         $tx = Transaction::create([
             'user_id' => $request->user()->id,
             'type' => 'payout', // a withdrawal leaves the wallet to the destination
-            'stellar_tx_hash' => $data['tx_hash'],
-            'status' => 'pending', // finalized by the indexer from chain
-            'explorer_url' => $this->stellar->explorerUrl($data['tx_hash']),
+            'stellar_tx_hash' => $hash,
+            // With no hash there's nothing for the indexer to finalize — the
+            // contract call already settled it, so record it as success.
+            'status' => $hash ? 'pending' : 'success',
+            'explorer_url' => $hash ? $this->stellar->explorerUrl($hash) : null,
             'meta' => [
                 'kind' => 'withdrawal',
                 'amount' => (string) $data['amount'],
@@ -249,6 +284,59 @@ class WalletController extends Controller
         ]);
 
         return response()->json($tx, 201);
+    }
+
+    /**
+     * Per-asset summary of what Saji has actually PAID this user, and how much
+     * of it they've already withdrawn.
+     *
+     * The withdraw screen uses this to cap the "in your wallet" figure. Without
+     * it the frontend counted every supported asset the wallet held — including
+     * funds the user put there themselves, which Saji has no business offering
+     * to withdraw. Pure DB (no RPC), so the DNS wall doesn't affect it.
+     */
+    public function payoutSummary(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        // Confirmed payouts, grouped by the paying circle's asset.
+        $paid = Payout::query()
+            ->where('recipient_id', $user->id)
+            ->where('status', 'confirmed')
+            ->join('groups', 'groups.id', '=', 'payouts.group_id')
+            ->groupBy('groups.asset_code')
+            ->selectRaw('groups.asset_code as asset_code, SUM(payouts.net_amount) as total')
+            ->pluck('total', 'asset_code');
+
+        // Withdrawals the client has logged, by asset (meta is JSON).
+        $withdrawn = [];
+        Transaction::query()
+            ->where('user_id', $user->id)
+            ->where('type', 'payout')
+            ->whereIn('status', ['pending', 'success'])
+            ->get(['meta'])
+            ->each(function ($tx) use (&$withdrawn) {
+                $meta = $tx->meta ?? [];
+                if (($meta['kind'] ?? null) !== 'withdrawal') {
+                    return;
+                }
+                $code = $meta['asset_code'] ?? 'USDC';
+                $withdrawn[$code] = ($withdrawn[$code] ?? 0) + (float) ($meta['amount'] ?? 0);
+            });
+
+        $assets = [];
+        foreach ($paid as $code => $total) {
+            $owed = max(0, (float) $total - ($withdrawn[$code] ?? 0));
+            $assets[] = [
+                'asset_code' => $code,
+                'paid_total' => number_format((float) $total, 7, '.', ''),
+                'withdrawn_total' => number_format($withdrawn[$code] ?? 0, 7, '.', ''),
+                // What Saji paid that hasn't been sent out yet.
+                'owed' => number_format($owed, 7, '.', ''),
+            ];
+        }
+
+        return response()->json(['assets' => $assets]);
     }
 
     /** Wallet history: the user's on-chain transactions, newest first. */

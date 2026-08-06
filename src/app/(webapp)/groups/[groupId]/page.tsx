@@ -14,28 +14,13 @@ import {
 	assetUrl,
 	ApiError,
 } from "@/lib/api";
-import { groupToCircle, labelize } from "@/features/group/group-view";
+import { cycleDaysFor, groupToCircle, labelize } from "@/features/group/group-view";
 import { pageRoutes } from "@/config/routes";
 import { useSavingsContract } from "@/lib/hooks/useSavingsContract";
 import { tokenFor } from "@/lib/contract/tokens";
 import { addTrustline } from "@/lib/wallet";
 import { toast } from "@/lib/utils/toast";
 
-/** Contribution frequency → cycle length in days (for the on-chain create). */
-function cycleDaysFor(frequency: string | undefined): number {
-	switch (frequency) {
-		case "daily":
-			return 1;
-		case "weekly":
-			return 7;
-		case "bi_weekly":
-			return 14;
-		case "monthly":
-			return 30;
-		default:
-			return 7;
-	}
-}
 
 export default function GroupPreviewPage() {
 	// Auth token lives in localStorage, so the fetch must run client-side; read
@@ -204,14 +189,13 @@ export default function GroupPreviewPage() {
 		if (!data) return;
 		setActivating(true);
 		try {
-			const cycleDays =
-				data.contribution_frequency === "custom"
-					? data.cycle_length_days || 1
-					: undefined;
 			const onchainId = await createGroupOnchain({
 				token: tokenFor(data.asset_code).sac,
 				contributionAmount: data.contribution_amount,
-				cycleLengthDays: cycleDays ?? cycleDaysFor(data.contribution_frequency),
+				cycleLengthDays: cycleDaysFor(
+					data.contribution_frequency,
+					data.cycle_length_days,
+				),
 				feeBps: data.fee_bps ?? 0,
 				lateFeeBps: data.late_fee_bps ?? 0,
 				gracePeriodHours: data.grace_period_hours ?? 0,

@@ -68,9 +68,22 @@ export default function GroupCompletePage() {
 					</div>
 				</div>
 
+				{/* This is the moment the user is thinking about their money, so
+				    point at it rather than dead-ending on "Go to Home". */}
+				<p className="mt-8 text-sm text-muted-foreground">
+					Your payout is in your Saji Balance. Withdraw it to any wallet you
+					choose.
+				</p>
+				<Button
+					href={pageRoutes.dashboardRoutes.WITHDRAW}
+					className="mt-3 w-full"
+				>
+					Withdraw your payout
+				</Button>
 				<Button
 					href={pageRoutes.dashboardRoutes.OVERVIEW}
-					className="mt-8 w-full"
+					variant="outline"
+					className="mt-3 w-full"
 				>
 					Go to Home
 				</Button>

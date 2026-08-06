@@ -620,12 +620,29 @@ impl SavingsContract {
         Ok(())
     }
 
-    /// Claim a payout that a completed cycle earmarked for the caller. The member
-    /// signs this to pull their owed balance from the contract's escrow to their
-    /// own wallet — the "Withdraw" action for a circle payout. Non-custodial: the
-    /// funds were held by the contract, never by Saji, and only move on the
-    /// recipient's own signature. Returns the claimed amount (stroops).
-    pub fn claim_payout(env: Env, group_id: u64, member: Address) -> Result<i128, Error> {
+    /// Claim a payout that a completed cycle earmarked for `member`, sending it
+    /// to `to` — the "Withdraw" action for a circle payout.
+    ///
+    /// Non-custodial: the funds were held by the contract, never by Saji, and
+    /// only move on the member's own signature. `member.require_auth()` means
+    /// naming a destination is the member's choice alone — nobody else can
+    /// redirect their payout. `to` is deliberately unrestricted so a member can
+    /// withdraw straight to any wallet they choose; it may equal `member`.
+    ///
+    /// The claimable entry stays keyed on `member` (not `to`), so a claim to a
+    /// third party still clears the right balance and can't be replayed.
+    ///
+    /// Note: if `to` holds no trustline for the group's token the transfer
+    /// panics and the whole claim reverts — the payout stays escrowed and
+    /// claimable, so nothing is lost. Callers should check first.
+    ///
+    /// Returns the claimed amount (stroops).
+    pub fn claim_payout(
+        env: Env,
+        group_id: u64,
+        member: Address,
+        to: Address,
+    ) -> Result<i128, Error> {
         member.require_auth();
 
         let config = Self::load_config(&env, group_id)?;
@@ -638,15 +655,16 @@ impl SavingsContract {
             return Err(Error::NothingToClaim);
         }
 
-        // Transfer the escrowed net from the contract to the claiming member.
+        // Transfer the escrowed net from the contract to the chosen destination.
         let token_client = token::Client::new(&env, &config.token);
-        token_client.transfer(&env.current_contract_address(), &member, &amount);
+        token_client.transfer(&env.current_contract_address(), &to, &amount);
 
         // Clear the claim so it can't be double-withdrawn.
         storage.remove(&DataKey::Claimable(group_id, member.clone()));
 
+        // `to` is published so the indexer can see where the funds actually went.
         env.events().publish(
-            (symbol_short!("claimed"), group_id, member),
+            (symbol_short!("claimed"), group_id, member, to),
             amount,
         );
 

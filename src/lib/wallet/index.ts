@@ -119,6 +119,87 @@ export async function walletBalances(address: string): Promise<WalletBalances> {
 }
 
 /**
+ * Turn a Horizon submission failure into something a user can act on.
+ *
+ * The SDK's error message for a rejected tx is just "Transaction submission
+ * failed. Server responded: 400 Bad Request" — the real cause lives in
+ * `response.data.extras.result_codes`, which it doesn't surface. This digs that
+ * out and maps the codes we can actually hit, falling back to the raw codes so
+ * an unmapped failure is still diagnosable instead of opaque.
+ */
+function describeSubmitError(err: unknown, ctx: { code: string }): Error {
+	const extras = (
+		err as {
+			response?: {
+				data?: {
+					extras?: {
+						result_codes?: { transaction?: string; operations?: string[] };
+					};
+				};
+			};
+		}
+	)?.response?.data?.extras;
+
+	const tx = extras?.result_codes?.transaction;
+	const ops = extras?.result_codes?.operations ?? [];
+	if (!tx && ops.length === 0) {
+		return err instanceof Error ? err : new Error(String(err));
+	}
+
+	const all = [tx, ...ops].filter(Boolean).join(" ");
+	const msg = (() => {
+		if (/op_underfunded|tx_insufficient_balance/.test(all))
+			return `Not enough ${ctx.code} in your wallet to cover this amount plus the network fee.`;
+		if (/op_no_trust|op_no_issuer/.test(all))
+			return `The destination can't receive ${ctx.code} — it needs a ${ctx.code} trustline first.`;
+		if (/op_no_destination/.test(all))
+			return "That destination account doesn't exist on this network yet.";
+		if (/tx_insufficient_fee/.test(all))
+			return "The network fee was too low — the network is busy. Try again.";
+		if (/tx_bad_seq/.test(all))
+			return "Your wallet submitted an out-of-date transaction. Try again.";
+		if (/tx_too_late|tx_bad_auth/.test(all))
+			return "The signed transaction expired or was rejected. Try again.";
+		if (/op_line_full/.test(all))
+			return `The destination can't hold any more ${ctx.code}.`;
+		return `The network rejected this transaction (${all}).`;
+	})();
+
+	return new Error(msg);
+}
+
+/**
+ * How much of `code` this account can actually SEND right now.
+ *
+ * For issued assets that's simply the balance. For native XLM it is not: every
+ * account must retain a base reserve (1 XLM + 0.5 per subentry, e.g. each
+ * trustline) plus the transaction fee. Sending the full balance is rejected
+ * with `op_underfunded`, so "Max" has to mean balance-minus-reserve, not
+ * balance. Returns 0 when nothing is spendable.
+ */
+export async function spendableBalance(
+	address: string,
+	code: string,
+): Promise<number> {
+	const res = await fetch(`${HORIZON_URL}/accounts/${address}`);
+	if (!res.ok) return 0;
+	const account: {
+		balances?: { asset_type?: string; asset_code?: string; balance?: string }[];
+		subentry_count?: number;
+	} = await res.json();
+
+	const entry = (account.balances ?? []).find((b) =>
+		code === "XLM" ? b.asset_type === "native" : b.asset_code === code,
+	);
+	const balance = Number(entry?.balance ?? 0);
+	if (code !== "XLM") return Math.max(0, balance);
+
+	// 1 XLM base + 0.5 per subentry, plus headroom for the fee.
+	const reserve = 1 + 0.5 * (account.subentry_count ?? 0) + 0.01;
+	return Math.max(0, balance - reserve);
+}
+
+/**
  * True if `address` already trusts `code`/`issuer` — i.e. it can hold that
  * asset. Stellar rejects payments of an issued asset to an account without a
  * trustline, so this gates the "Add trustline" affordance.
@@ -171,7 +252,11 @@ export async function addTrustline(
 	const signed = await signXdr(tx.toXDR());
 
 	const envelope = TransactionBuilder.fromXDR(signed, NETWORK_PASSPHRASE);
-	await server.submitTransaction(envelope);
+	try {
+		await server.submitTransaction(envelope);
+	} catch (err) {
+		throw describeSubmitError(err, { code });
+	}
 }
 
 /**
@@ -198,11 +283,16 @@ export async function withdrawToken(input: {
 	const server = new Horizon.Server(HORIZON_URL);
 	const account = await server.loadAccount(input.from);
 
-	// Native XLM vs an issued asset (USDC/USDT).
+	// Native XLM vs an issued asset (USDC/USDT). A non-XLM code with no issuer is
+	// a configuration error, NOT a reason to fall back to native — that would
+	// silently send XLM while the UI promised USDC/USDT.
+	if (input.code !== "XLM" && !input.issuer) {
+		throw new Error(
+			`Missing issuer for ${input.code} — cannot build this withdrawal.`,
+		);
+	}
 	const asset =
-		input.code === "XLM" || !input.issuer
-			? Asset.native()
-			: new Asset(input.code, input.issuer);
+		input.code === "XLM" ? Asset.native() : new Asset(input.code, input.issuer!);
 
 	const tx = new TransactionBuilder(account, {
 		fee: BASE_FEE,
@@ -220,6 +310,10 @@ export async function withdrawToken(input: {
 
 	const signed = await signXdr(tx.toXDR());
 	const envelope = TransactionBuilder.fromXDR(signed, NETWORK_PASSPHRASE);
-	const res = await server.submitTransaction(envelope);
-	return res.hash;
+	try {
+		const res = await server.submitTransaction(envelope);
+		return res.hash;
+	} catch (err) {
+		throw describeSubmitError(err, { code: input.code });
+	}
 }

@@ -352,11 +352,12 @@ export default function CircleDashboardPage() {
 						showViewAll
 					/>
 
-					{/* How this circle works: a rotating circle pays out AUTOMATICALLY
-					    to one member per cycle — there is no manual "withdraw". This
-					    panel makes the current state legible (whose turn, which cycle,
-					    whether you've paid) so "Make a Payment" with no withdraw button
-					    reads as intended, not broken. */}
+					{/* How this circle works: each cycle earmarks the pool for one
+					    member. The contract is PULL-BASED — the money stays escrowed
+					    until that member claims it from their Saji Balance, so there IS
+					    a withdraw step, just not on this page. This panel makes the
+					    current state legible (whose turn, which cycle, whether you've
+					    paid). */}
 					{!isCompleted && (
 						<section className="mt-8 rounded-2xl bg-[#f7f7f7] p-4 md:p-6">
 							<div className="flex items-center justify-between">
@@ -378,9 +379,9 @@ export default function CircleDashboardPage() {
 								</p>
 							)}
 							<p className="mt-2 text-xs font-light text-muted-foreground">
-								Payouts are automatic — when all members have paid this cycle,
-								the pool is sent to the member whose turn it is. There&apos;s no
-								manual withdrawal in a rotating circle.
+								When everyone has paid this cycle, the pool is earmarked for the
+								member whose turn it is. It then shows in their Saji Balance —
+								they approve one transaction to move it to their wallet.
 							</p>
 						</section>
 					)}
@@ -402,8 +403,9 @@ export default function CircleDashboardPage() {
 						</Button>
 						{paidThisCycle && (
 							<p className="mt-2 text-xs font-light text-muted-foreground">
-								You&apos;re paid up for this cycle. The payout sends
-								automatically once everyone else has contributed.
+								You&apos;re paid up for this cycle. Once everyone else has
+								contributed, the payout is earmarked for this cycle&apos;s
+								recipient, who claims it from their Saji Balance.
 							</p>
 						)}
 					</div>

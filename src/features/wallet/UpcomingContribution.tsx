@@ -17,7 +17,7 @@ export default function UpcomingContribution({
 	if (!due) return null;
 
 	const amount = `${Number(due.amount).toLocaleString()} ${due.asset_code}`;
-	const when = due.due_at ? whenLabel(due.due_at) : "soon";
+	const when = whenLabel(due.due_at);
 
 	return (
 		<section className="mt-8 flex flex-col gap-4 rounded-2xl bg-[#f7f7f7] p-4 md:flex-row md:items-center md:justify-between md:p-6">
@@ -40,7 +40,9 @@ export default function UpcomingContribution({
 	);
 }
 
-function whenLabel(iso: string): string {
+/** "today" / "in 3 days" / "2 days ago" — null due dates read as "soon". */
+export function whenLabel(iso: string | null): string {
+	if (!iso) return "soon";
 	const d = Math.round(
 		(new Date(iso).getTime() - Date.now()) / (1000 * 60 * 60 * 24),
 	);

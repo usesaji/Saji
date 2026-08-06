@@ -363,6 +363,40 @@ export const wallet = {
 		return request<SajiBalance>("/api/wallet/saji-balance", { auth: true });
 	},
 
+	/**
+	 * The user's live circles (DB only, no RPC). The frontend reads each
+	 * circle's claimable payout directly from chain — the backend's RPC read is
+	 * blocked from the serve worker (DNS wall), so this avoids relying on it.
+	 */
+	myCircles(): Promise<{
+		stellar_address: string | null;
+		circles: {
+			group_id: number;
+			onchain_group_id: number;
+			group_name: string;
+			asset_code: string;
+		}[];
+	}> {
+		return request("/api/wallet/my-circles", { auth: true });
+	},
+
+	/**
+	 * Per-asset: what Saji has actually paid this user, and how much of it they
+	 * have already withdrawn. Used to cap the "in your wallet" figure so the
+	 * withdraw screen never offers to send funds Saji didn't pay. Pure DB.
+	 */
+	payoutSummary(): Promise<{
+		assets: {
+			asset_code: string;
+			paid_total: string;
+			withdrawn_total: string;
+			/** Paid but not yet withdrawn. */
+			owed: string;
+		}[];
+	}> {
+		return request("/api/wallet/payout-summary", { auth: true });
+	},
+
 	/** Build an unsigned withdrawal payment for the wallet to sign. */
 	withdraw(input: {
 		amount: string | number;

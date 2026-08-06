@@ -79,6 +79,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/wallet/balance', [WalletController::class, 'balance']);
     // "Saji balance": total withdrawable = claimable circle payouts + wallet.
     Route::get('/wallet/saji-balance', [WalletController::class, 'sajiBalance']);
+    // The user's live circles (DB only) — frontend reads claimables client-side.
+    Route::get('/wallet/my-circles', [WalletController::class, 'myCircles']);
+    // What Saji has paid this user vs. what they've withdrawn (DB only). Caps
+    // the "in your wallet" figure so we never offer to withdraw their own funds.
+    Route::get('/wallet/payout-summary', [WalletController::class, 'payoutSummary']);
     Route::post('/wallet/withdraw', [WalletController::class, 'withdraw']);
     // Log a client-side-broadcast withdrawal (Horizon in the browser).
     Route::post('/wallet/withdraw/log', [WalletController::class, 'logWithdrawal']);

@@ -34,7 +34,7 @@ import { pageRoutes } from "../../config/routes";
 import { toast } from "../../lib/utils/toast";
 import { useSavingsContract } from "../../lib/hooks/useSavingsContract";
 import { TOKEN_LIST, tokenFor } from "../../lib/contract/tokens";
-import { labelize } from "./group-view";
+import { cycleDaysFor, labelize } from "./group-view";
 
 // ---------------------------------------------------------------------------
 // Options
@@ -47,6 +47,7 @@ const FREQUENCIES = [
 	{ value: "monthly", label: "Monthly" },
 	{ value: "custom", label: "Custom" },
 ];
+
 const GROUP_TYPES = [
 	{ value: "private", label: "Private" },
 	{ value: "public", label: "Public" },
@@ -274,10 +275,10 @@ export default function CreateGroupForm() {
 				const onchainId = await createGroupOnchain({
 					token: tokenFor(form.asset_code).sac,
 					contributionAmount: form.contribution_amount,
-					cycleLengthDays:
-						form.contribution_frequency === "custom"
-							? Number(form.cycle_length_days) || 1
-							: 7,
+					cycleLengthDays: cycleDaysFor(
+						form.contribution_frequency,
+						form.cycle_length_days,
+					),
 					feeBps: payload.fee_bps ?? 0,
 					lateFeeBps: payload.late_fee_bps ?? 0,
 					gracePeriodHours: payload.grace_period_hours ?? 0,
