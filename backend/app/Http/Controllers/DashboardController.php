@@ -18,6 +18,10 @@ class DashboardController extends Controller
 {
     public function show(Request $request, Group $group): JsonResponse
     {
+        // Pool balance, next recipient and contribution progress are private to
+        // the circle — gate on membership, not just authentication.
+        abort_unless($group->isVisibleTo($request->user()), 403, 'You are not a member of this group.');
+
         $group->loadCount([
             'members as member_count' => fn ($q) => $q->where('status', 'approved'),
         ]);

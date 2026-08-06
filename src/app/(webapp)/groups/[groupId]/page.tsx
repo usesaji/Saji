@@ -17,7 +17,7 @@ import {
 import { cycleDaysFor, groupToCircle, labelize } from "@/features/group/group-view";
 import { pageRoutes } from "@/config/routes";
 import { useSavingsContract } from "@/lib/hooks/useSavingsContract";
-import { tokenFor } from "@/lib/contract/tokens";
+import { requireToken } from "@/lib/contract/tokens";
 import { addTrustline } from "@/lib/wallet";
 import { toast } from "@/lib/utils/toast";
 
@@ -190,7 +190,7 @@ export default function GroupPreviewPage() {
 		setActivating(true);
 		try {
 			const onchainId = await createGroupOnchain({
-				token: tokenFor(data.asset_code).sac,
+				token: requireToken(data.asset_code).sac,
 				contributionAmount: data.contribution_amount,
 				cycleLengthDays: cycleDaysFor(
 					data.contribution_frequency,
@@ -329,7 +329,7 @@ export default function GroupPreviewPage() {
 			// creation). One signature, no-op if already trusted — so a
 			// contribution never fails for a missing trustline.
 			const linked = me?.stellar_address ?? null;
-			const asset = tokenFor(data.asset_code);
+			const asset = requireToken(data.asset_code);
 			if (linked && !asset.native && asset.issuer) {
 				await addTrustline(linked, asset.code, asset.issuer);
 			}

@@ -43,13 +43,30 @@ class StellarService
     {
         $this->rpcUrl = (string) config('services.stellar.rpc_url');
         $this->contractId = (string) config('services.stellar.contract_id');
-        $this->network = (string) config('services.stellar.network', 'testnet');
+        $this->network = (string) config('services.stellar.network');
+
+        // Fail loudly rather than defaulting. Silently falling back to testnet
+        // on a mainnet host would point real money at the wrong network.
+        if ($this->network === '') {
+            throw new RuntimeException(
+                'STELLAR_NETWORK is not set. Set it explicitly ("public" or '.
+                '"testnet") — there is deliberately no default.'
+            );
+        }
+        if (! isset(self::PASSPHRASES[$this->network])
+            && ! config('services.stellar.network_passphrase')) {
+            throw new RuntimeException(
+                "Unknown STELLAR_NETWORK \"{$this->network}\" and no ".
+                'STELLAR_NETWORK_PASSPHRASE set.'
+            );
+        }
+
         // The `stellar` CLI's `--network <alias>` only works when that alias is
         // configured on the host. To be self-contained we pass the passphrase +
         // RPC URL via env (see stellar()), which the CLI honors without setup.
         $this->networkPassphrase = (string) (
             config('services.stellar.network_passphrase')
-                ?: (self::PASSPHRASES[$this->network] ?? self::PASSPHRASES['testnet'])
+                ?: self::PASSPHRASES[$this->network]
         );
     }
 
@@ -483,17 +500,26 @@ class StellarService
 
     /**
      * A source account for read-only (`--send no`) contract simulations. The CLI
-     * requires one even though nothing is signed or submitted. The service secret
-     * works and needs no per-request user; the read reveals nothing about it.
+     * requires one even though nothing is signed or submitted.
+     *
+     * This MUST be a PUBLIC address (G...), never the service secret. Arguments
+     * are passed as argv (see `stellar()`), and on Linux argv is world-readable
+     * through /proc/<pid>/cmdline — so putting a secret key here would leak it
+     * to any local process, dozens of times per indexer sweep. A simulation
+     * signs nothing, so a public address is sufficient.
      */
     private function readSource(): string
     {
-        $secret = (string) config('services.stellar.service_secret');
-        if ($secret === '') {
-            throw new RuntimeException('No STELLAR_SERVICE_SECRET set for read simulations.');
+        $public = (string) config('services.stellar.read_source');
+        if ($public !== '') {
+            return $public;
         }
 
-        return $secret;
+        throw new RuntimeException(
+            'No STELLAR_READ_SOURCE set. Read simulations need a PUBLIC Stellar '.
+            'address (G...); never use the service secret — CLI arguments are '.
+            'visible to other processes on the host.'
+        );
     }
 
     /** Low-level Soroban JSON-RPC call over HTTP. Returns the `result` object. */

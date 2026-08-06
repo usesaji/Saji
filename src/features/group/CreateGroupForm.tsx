@@ -33,7 +33,7 @@ import {
 import { pageRoutes } from "../../config/routes";
 import { toast } from "../../lib/utils/toast";
 import { useSavingsContract } from "../../lib/hooks/useSavingsContract";
-import { TOKEN_LIST, tokenFor } from "../../lib/contract/tokens";
+import { TOKEN_LIST, requireToken } from "../../lib/contract/tokens";
 import { cycleDaysFor, labelize } from "./group-view";
 
 // ---------------------------------------------------------------------------
@@ -273,7 +273,7 @@ export default function CreateGroupForm() {
 			// Create on-chain (wallet signs) + record the id. Non-fatal if it fails.
 			try {
 				const onchainId = await createGroupOnchain({
-					token: tokenFor(form.asset_code).sac,
+					token: requireToken(form.asset_code).sac,
 					contributionAmount: form.contribution_amount,
 					cycleLengthDays: cycleDaysFor(
 						form.contribution_frequency,
@@ -383,7 +383,7 @@ export default function CreateGroupForm() {
 	// STEP 3 — Review
 	// =========================================================================
 	if (step === 3) {
-		const token = tokenFor(form.asset_code);
+		const token = requireToken(form.asset_code);
 		return (
 			<div className="mx-auto max-w-lg">
 				<StepHeader step={3} total={3} title={form.name || "Review"} onBack={back} />

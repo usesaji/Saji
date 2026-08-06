@@ -46,7 +46,7 @@ export default function SavingsSummaryCard({ data }: { data: DashboardData }) {
 						<p className="text-[10px] md:text-sm">Saving in Circles</p>
 						<div className="mt-1 flex items-center gap-2.5">
 							<h3 className="truncate text-[32px] font-medium md:text-[44px]">
-								{hidden ? "*******" : formatMoney(data.saved_balance)}
+								{hidden ? "*******" : formatMoney(data.saved_balance, data.asset_code)}
 							</h3>
 							<button
 								type="button"

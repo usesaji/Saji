@@ -49,7 +49,7 @@ class PublicCircleController extends Controller
             'description' => ['nullable', 'string'],
             'photo_url' => ['nullable', 'string', 'max:2048'],
             'asset_code' => ['nullable', 'string', 'max:12'],
-            'savings_target' => ['required', 'numeric', 'min:0.0000001'],
+            'savings_target' => ['required', 'numeric', 'min:0.0000001', 'max:1000000000', 'decimal:0,7'],
             'challenge_ends_at' => ['nullable', 'date', 'after:today'],
         ]);
 

@@ -22,6 +22,8 @@ class ContributionController extends Controller
     /** Contributions the authenticated user has made to a group. */
     public function index(Request $request, Group $group): JsonResponse
     {
+        abort_unless($group->isVisibleTo($request->user()), 403, 'You are not a member of this group.');
+
         $contributions = $group->contributions()
             ->where('user_id', $request->user()->id)
             ->latest()

@@ -5,6 +5,7 @@ import { IoEye, IoEyeOff } from "react-icons/io5";
 import { Button } from "../../components/ui/button";
 import { pageRoutes } from "../../config/routes";
 import type { SajiBalance } from "../../lib/hooks/useSajiBalance";
+import { formatStroops } from "../../lib/stroops";
 
 /**
  * "Saji Balance" — the money the user can actually withdraw right now.
@@ -22,10 +23,10 @@ export default function SajiBalanceCard({
 	balance: SajiBalance;
 }) {
 	const [hidden, setHidden] = useState(false);
-	const { assets, loading, linked, hasWithdrawable } = balance;
+	const { assets, loading, error, linked, hasWithdrawable, refresh } = balance;
 
-	const fmt = (n: number) =>
-		hidden ? "*****" : Number(n.toFixed(7)).toLocaleString();
+	const fmt = (stroops: bigint) =>
+		hidden ? "*****" : formatStroops(stroops);
 
 	return (
 		<section className="mt-4 rounded-2xl bg-[#f7f7f7] p-4 md:p-6">
@@ -48,6 +49,18 @@ export default function SajiBalanceCard({
 				<p className="mt-3 text-sm text-muted-foreground">
 					Checking your balances…
 				</p>
+			) : error ? (
+				/* Never render a failed read as a zero balance — that tells a user
+				   with a real payout that their savings are gone. */
+				<div className="mt-3 text-sm">
+					<p className="text-error-500">{error}</p>
+					<p className="mt-1 text-xs text-muted-foreground">
+						Your funds are safe on-chain — we just couldn&apos;t read them.
+					</p>
+					<button onClick={refresh} className="mt-2 font-medium underline">
+						Try again
+					</button>
+				</div>
 			) : !linked ? (
 				<p className="mt-3 text-sm text-muted-foreground">
 					Add a wallet address to your account to see your Saji Balance.
@@ -69,7 +82,7 @@ export default function SajiBalanceCard({
 								</p>
 
 								<div className="mt-2 space-y-1 text-xs md:text-sm">
-									{a.claimable_total > 0 && (
+									{a.claimable_total > 0n && (
 										<div className="flex items-baseline justify-between gap-3">
 											<span className="text-muted-foreground">
 												Ready to claim
@@ -87,7 +100,7 @@ export default function SajiBalanceCard({
 											</span>
 										</div>
 									)}
-									{a.wallet_total > 0 && (
+									{a.wallet_total > 0n && (
 										<div className="flex items-baseline justify-between gap-3">
 											<span className="text-muted-foreground">
 												Claimed

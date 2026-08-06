@@ -11,20 +11,20 @@ export default function GroupStats() {
 	// Real figures from the user home dashboard. "Total Pending" is the amount
 	// currently due (quick_deposit), which is the only pending figure the
 	// dashboard exposes; falls back to — when nothing is owed.
-	const quickDeposit = data?.quick_deposit as { amount?: string } | null;
+	const quickDeposit = data?.quick_deposit ?? null;
 
 	const activeGroups = data?.circles_total ?? 0;
 
 	const stats = [
 		{
 			title: "Total Saved",
-			value: loading ? "…" : formatMoney(data?.saved_balance),
+			value: loading ? "…" : formatMoney(data?.saved_balance, data?.asset_code),
 			color: "bg-primary",
 			hideable: true,
 		},
 		{
 			title: "Total Pending",
-			value: loading ? "…" : formatMoney(quickDeposit?.amount ?? null),
+			value: loading ? "…" : formatMoney(quickDeposit?.amount ?? null, quickDeposit?.asset_code),
 			color: "bg-accent",
 			hideable: true,
 		},

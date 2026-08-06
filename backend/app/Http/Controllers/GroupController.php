@@ -47,8 +47,8 @@ class GroupController extends Controller
             'description' => ['nullable', 'string'],
             'photo_url' => ['nullable', 'string', 'max:2048'],
             'asset_code' => ['nullable', 'string', 'max:12'],
-            'contribution_amount' => ['required', 'numeric', 'min:0.0000001'],
-            'target_amount' => ['nullable', 'numeric', 'min:0.0000001'],
+            'contribution_amount' => ['required', 'numeric', 'min:0.0000001', 'max:1000000000', 'decimal:0,7'],
+            'target_amount' => ['nullable', 'numeric', 'min:0.0000001', 'max:1000000000', 'decimal:0,7'],
             'contribution_frequency' => ['required', 'in:daily,weekly,bi_weekly,monthly,custom'],
             // Required only when frequency is custom; otherwise derived below.
             'cycle_length_days' => ['required_if:contribution_frequency,custom', 'integer', 'min:1', 'max:365'],
@@ -164,9 +164,19 @@ class GroupController extends Controller
         return response()->json(['photo_url' => $url]);
     }
 
-    /** A single group with its members. */
-    public function show(Group $group): JsonResponse
+    /**
+     * A single group with its members.
+     *
+     * Membership-gated: the payload carries every member's name and Stellar
+     * address (which de-anonymizes their whole on-chain history) plus the
+     * `invite_token` that is the ONLY gate on joining a private circle. Without
+     * this check any authenticated user could enumerate groups and join ones
+     * they were never invited to.
+     */
+    public function show(Request $request, Group $group): JsonResponse
     {
+        abort_unless($group->isVisibleTo($request->user()), 403, 'You are not a member of this group.');
+
         return response()->json(
             $group->load(['organizer:id,name', 'members.user:id,name,stellar_address'])
                 ->loadCount('members')
@@ -303,6 +313,8 @@ class GroupController extends Controller
     public function circle(Request $request, Group $group): JsonResponse
     {
         $user = $request->user();
+        abort_unless($group->isVisibleTo($user), 403, 'You are not a member of this group.');
+
         $group->loadCount(['members as member_count' => fn ($q) => $q->where('status', 'approved')]);
 
         // Total deposited by the whole group (confirmed contributions).

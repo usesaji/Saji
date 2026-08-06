@@ -7,6 +7,7 @@ use App\Models\Group;
 use App\Models\Payout;
 use App\Models\Transaction;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -124,6 +125,31 @@ class ChainIndexer
      */
     public function reconcileGroup(Group $group): array
     {
+        // Serialize per group. The scheduler sweeps every 30s while
+        // SpawnsChainReconcile fires a detached process on every contribute /
+        // activate, so two runs can overlap on the same group — and both would
+        // read "not yet recorded" before either writes, double-counting a payout.
+        //
+        // A lock rather than a DB transaction: this method invokes the Stellar
+        // CLI (up to 120s per call), and holding a DB transaction across that
+        // would pin connections and risk lock timeouts. `block(0)` means a
+        // concurrent run returns immediately instead of queueing.
+        $lock = Cache::lock("chain-reconcile:group:{$group->id}", 180);
+
+        if (! $lock->get()) {
+            return ['status_updated' => 0, 'contributions_confirmed' => 0, 'payouts_triggered' => 0, 'payouts_recorded' => 0];
+        }
+
+        try {
+            return $this->reconcileGroupLocked($group);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /** @return array{status_updated:int, contributions_confirmed:int, payouts_triggered:int, payouts_recorded:int} */
+    private function reconcileGroupLocked(Group $group): array
+    {
         $onchainId = (int) $group->onchain_group_id;
         $changed = ['status_updated' => 0, 'contributions_confirmed' => 0, 'payouts_triggered' => 0, 'payouts_recorded' => 0];
 
@@ -234,6 +260,10 @@ class ChainIndexer
     {
         $recorded = 0;
 
+        // The cycle that just PAID OUT is the one before the current counter —
+        // `trigger_payout` advances it as its last step.
+        $paidCycle = max(0, (int) $group->current_cycle - 1);
+
         foreach ($members as $address) {
             $user = User::where('stellar_address', $address)->first();
             if (! $user) {
@@ -251,29 +281,39 @@ class ChainIndexer
 
             $claimable = $claimableStroops / 10_000_000;
 
-            // Total net we've already logged as payouts for this member+group.
-            $recordedNet = (float) Payout::query()
-                ->where('group_id', $group->id)
-                ->where('recipient_id', $user->id)
-                ->sum('net_amount');
+            // Key on (group, cycle, recipient) and create at most one row.
+            //
+            // Do NOT diff against the member's lifetime recorded total:
+            // `claimableOf` is a CURRENT escrow balance, not a cumulative one, so
+            // it drops to 0 the moment the user claims. Subtracting a cumulative
+            // sum from it means that after the first claim every later payout
+            // computes a delta of <= 0 and is never recorded — the ledger
+            // silently stops tracking real payouts, and `payoutSummary.owed`
+            // (which bounds withdrawals) goes wrong.
+            // Looked up by (group, cycle) because that is the table's unique key
+            // — one payout per cycle, matching the rotation. Including the
+            // recipient in the lookup would let a mismatch slip past
+            // firstOrCreate and then hit the DB constraint as an exception,
+            // aborting the sweep for every remaining member.
+            $payout = Payout::query()->firstOrCreate(
+                [
+                    'group_id' => $group->id,
+                    'cycle' => $paidCycle,
+                ],
+                [
+                    'recipient_id' => $user->id,
+                    'gross_amount' => $claimable,
+                    'fee_amount' => 0,
+                    'net_amount' => $claimable,
+                    // payouts.status enum is pending|submitted|confirmed|failed
+                    // (distinct from transactions.status which uses success).
+                    'status' => 'confirmed',
+                ],
+            );
 
-            // If the chain owes them more than we've recorded, log the delta.
-            $delta = round($claimable - $recordedNet, 7);
-            if ($delta <= 0) {
-                continue;
+            if (! $payout->wasRecentlyCreated) {
+                continue; // already recorded for this cycle
             }
-
-            $payout = Payout::create([
-                'group_id' => $group->id,
-                'recipient_id' => $user->id,
-                'cycle' => $group->current_cycle,
-                'gross_amount' => $delta,
-                'fee_amount' => 0,
-                'net_amount' => $delta,
-                // payouts.status enum is pending|submitted|confirmed|failed
-                // (distinct from transactions.status which uses success).
-                'status' => 'confirmed',
-            ]);
 
             Transaction::create([
                 'group_id' => $group->id,

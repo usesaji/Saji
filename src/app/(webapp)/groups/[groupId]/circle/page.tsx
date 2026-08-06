@@ -20,7 +20,7 @@ import { pageRoutes } from "@/config/routes";
 import PendingRequests from "@/features/group/PendingRequests";
 import { useSavingsContract } from "@/lib/hooks/useSavingsContract";
 import { useLiveCircle } from "@/lib/hooks/useLiveCircle";
-import { tokenFor } from "@/lib/contract/tokens";
+import { requireToken } from "@/lib/contract/tokens";
 import { addTrustline } from "@/lib/wallet";
 import { toast } from "@/lib/utils/toast";
 
@@ -137,7 +137,7 @@ export default function CircleDashboardPage() {
 			// no-op if it already trusts it) so the contribution can't fail for a
 			// missing trustline — the asset is picked at group creation, not here.
 			const linked = me?.stellar_address ?? null;
-			const asset = tokenFor(assetCode);
+			const asset = requireToken(assetCode);
 			if (linked && !asset.native && asset.issuer) {
 				await addTrustline(linked, asset.code, asset.issuer);
 			}

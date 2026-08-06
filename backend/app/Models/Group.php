@@ -39,6 +39,13 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 ])]
 class Group extends Model
 {
+    /**
+     * `invite_token` is the sole gate on joining a private circle, so it must
+     * never ride along in a serialized group. The organizer fetches it from the
+     * dedicated invite-link endpoint instead.
+     */
+    protected $hidden = ['invite_token'];
+
     protected function casts(): array
     {
         return [
@@ -98,6 +105,34 @@ class Group extends Model
     public function isChallenge(): bool
     {
         return $this->circle_kind === 'challenge';
+    }
+
+    /**
+     * Can this user see the group's private detail — finances, member roster
+     * (names + Stellar addresses), and the invite token?
+     *
+     * The organizer plus anyone with a live membership. Pending requesters are
+     * deliberately included: they need to see what they asked to join. Declined
+     * or removed members are not.
+     *
+     * Public challenge circles are discoverable by design, so they stay open.
+     */
+    public function isVisibleTo(?User $user): bool
+    {
+        if (! $user) {
+            return false;
+        }
+        if ($this->isChallenge() || $this->group_type === 'public') {
+            return true;
+        }
+        if ($this->organizer_id === $user->id) {
+            return true;
+        }
+
+        return $this->members()
+            ->where('user_id', $user->id)
+            ->whereIn('status', ['approved', 'pending'])
+            ->exists();
     }
 
     /**

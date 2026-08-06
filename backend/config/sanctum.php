@@ -50,7 +50,9 @@ return [
     |
     */
 
-    'expiration' => null,
+    // 30 days. Tokens live in the browser's localStorage, so a never-expiring
+    // token means any single leak grants permanent account access.
+    'expiration' => env('SANCTUM_EXPIRATION', 60 * 24 * 30),
 
     /*
     |--------------------------------------------------------------------------

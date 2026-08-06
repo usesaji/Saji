@@ -8,31 +8,33 @@
  * connected wallet), and submitting, all client-side. This bypasses the backend
  * for on-chain actions, so it isn't affected by the backend's network access.
  *
- * The contract id + default network passphrase are baked into the bindings; we
- * supply the RPC URL, the caller's public key, and a signing callback that
- * routes to Stellar Wallets Kit.
+ * Contract id, passphrase and RPC all come from `stellar-network` so they can
+ * never disagree — the generated bindings' baked-in `networks.testnet` is
+ * deliberately NOT used, since it would pin mainnet builds to a testnet
+ * contract.
  */
 
-import { Client, PayoutOrder, LatePenalty, networks } from "./savings/src";
-import { StellarWalletsKit, Networks } from "@creit.tech/stellar-wallets-kit";
+import { Client, PayoutOrder, LatePenalty } from "./savings/src";
+import { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
+import {
+	NETWORK_PASSPHRASE,
+	SAVINGS_CONTRACT_ID,
+	SOROBAN_RPC_URL,
+} from "../stellar-network";
 
-const RPC_URL =
-	process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ??
-	"https://soroban-testnet.stellar.org";
-
-export const NETWORK_PASSPHRASE = Networks.TESTNET;
+export { NETWORK_PASSPHRASE };
 
 export { PayoutOrder, LatePenalty };
 
 /**
  * A contract client bound to the connected wallet `publicKey`. All state-changing
- * calls will prompt that wallet to sign. The contract id + passphrase come from
- * the generated `networks.testnet` constant.
+ * calls will prompt that wallet to sign.
  */
 export function savingsClient(publicKey: string): Client {
 	return new Client({
-		...networks.testnet,
-		rpcUrl: RPC_URL,
+		contractId: SAVINGS_CONTRACT_ID,
+		networkPassphrase: NETWORK_PASSPHRASE,
+		rpcUrl: SOROBAN_RPC_URL,
 		publicKey,
 		// The kit returns { signedTxXdr, signerAddress } — the exact shape the
 		// SDK's signer contract expects.

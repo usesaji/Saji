@@ -177,7 +177,7 @@ class WalletController extends Controller
         $tokenSacs = (array) config('services.stellar.token_sacs', []);
 
         $data = $request->validate([
-            'amount' => ['required', 'numeric', 'min:0.0000001'],
+            'amount' => ['required', 'numeric', 'min:0.0000001', 'max:1000000000', 'decimal:0,7'],
             'destination' => ['nullable', 'string', 'regex:/^G[A-Z2-7]{55}$/'],
             // Which asset to withdraw; defaults to USDC for back-compat.
             'asset_code' => ['nullable', 'string', 'in:'.implode(',', array_keys($tokenSacs))],
@@ -262,7 +262,7 @@ class WalletController extends Controller
             // Nullable: a payout claimed STRAIGHT to the destination is settled by
             // the contract call itself, so the client has no separate payment hash.
             'tx_hash' => ['nullable', 'string', 'max:255'],
-            'amount' => ['required', 'numeric', 'min:0.0000001'],
+            'amount' => ['required', 'numeric', 'min:0.0000001', 'max:1000000000', 'decimal:0,7'],
             'asset_code' => ['nullable', 'string', 'max:12'],
         ]);
 

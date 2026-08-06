@@ -19,6 +19,8 @@
  * (XLM needs none — it's native). Override any address via env for other nets.
  */
 
+import { IS_MAINNET } from "../stellar-network";
+
 export type TokenCode = "USDC" | "USDT" | "XLM";
 
 export type TokenInfo = {
@@ -35,35 +37,60 @@ export type TokenInfo = {
 	native: boolean;
 };
 
+/**
+ * Read a token address that is MANDATORY on mainnet.
+ *
+ * The testnet fallbacks below are self-issued assets minted by keys we control.
+ * Falling back to one on mainnet would show a user "USDC" while they actually
+ * hold a worthless token — so on PUBLIC a missing variable throws instead.
+ */
+function tokenAddress(name: string, testnetFallback: string): string {
+	const value = process.env[name] ?? "";
+	if (value) return value;
+	if (IS_MAINNET) {
+		throw new Error(
+			`${name} must be set when NEXT_PUBLIC_STELLAR_NETWORK=PUBLIC. ` +
+				`The testnet default is a self-issued test asset and must never be ` +
+				`used as real money.`,
+		);
+	}
+	return testnetFallback;
+}
+
 export const TOKENS: Record<TokenCode, TokenInfo> = {
 	USDC: {
 		code: "USDC",
 		label: "USDC",
-		sac:
-			process.env.NEXT_PUBLIC_USDC_SAC ??
+		sac: tokenAddress(
+			"NEXT_PUBLIC_USDC_SAC",
 			"CCOY5JSTYMV4WN6W7WZS7JRMZXHSHKGEZQ5PCHEEAZLFQIVVFFHWCX7V",
-		issuer:
-			process.env.NEXT_PUBLIC_USDC_ISSUER ??
+		),
+		issuer: tokenAddress(
+			"NEXT_PUBLIC_USDC_ISSUER",
 			"GCBJNSZUUPK5HSB3JLQB37OLEE4VW2WE3ZUDGAMPBTGP5LJ6AT4U7H5M",
+		),
 		native: false,
 	},
 	USDT: {
 		code: "USDT",
 		label: "USDT",
-		sac:
-			process.env.NEXT_PUBLIC_USDT_SAC ??
+		sac: tokenAddress(
+			"NEXT_PUBLIC_USDT_SAC",
 			"CCM5YODOEZSDQNYO466BEH232DC2YYHCWULB6HA7PLEOKAOJIJP5GO2N",
-		issuer:
-			process.env.NEXT_PUBLIC_USDT_ISSUER ??
+		),
+		issuer: tokenAddress(
+			"NEXT_PUBLIC_USDT_ISSUER",
 			"GCEKXEAHM3NHGG7A6VTZ5OBZDBOC3VIZF26UDX43FGMDABMJHHRLZFKD",
+		),
 		native: false,
 	},
 	XLM: {
 		code: "XLM",
 		label: "XLM (native)",
-		sac:
-			process.env.NEXT_PUBLIC_XLM_SAC ??
+		sac: tokenAddress(
+			"NEXT_PUBLIC_XLM_SAC",
 			"CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+		),
 		issuer: null,
 		native: true,
 	},
@@ -71,7 +98,26 @@ export const TOKENS: Record<TokenCode, TokenInfo> = {
 
 export const TOKEN_LIST = Object.values(TOKENS);
 
-/** Resolve a token by code, defaulting to USDC. */
-export function tokenFor(code: string | null | undefined): TokenInfo {
-	return TOKENS[(code as TokenCode) ?? "USDC"] ?? TOKENS.USDC;
+/**
+ * Resolve a token by code, or null if it isn't one we support.
+ *
+ * Deliberately does NOT fall back to USDC. Defaulting an unknown code would
+ * hand back USDC's issuer while the UI still showed the original code, and that
+ * issuer goes straight into a payment — building a transfer of a different asset
+ * than the one named on screen. Callers must handle null and refuse to proceed.
+ */
+export function tokenFor(code: string | null | undefined): TokenInfo | null {
+	if (!code) return null;
+	return TOKENS[code as TokenCode] ?? null;
+}
+
+/** Like `tokenFor`, but throws — for paths where an unknown asset is a bug. */
+export function requireToken(code: string | null | undefined): TokenInfo {
+	const token = tokenFor(code);
+	if (!token) {
+		throw new Error(
+			`Unsupported asset "${code}". Saji supports ${Object.keys(TOKENS).join(", ")}.`,
+		);
+	}
+	return token;
 }

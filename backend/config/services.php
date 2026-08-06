@@ -42,11 +42,16 @@ return [
     ],
 
     'stellar' => [
-        'network' => env('STELLAR_NETWORK', 'testnet'),
-        'rpc_url' => env('STELLAR_RPC_URL', 'https://soroban-testnet.stellar.org'),
+        // No testnet defaults: a missing var on a mainnet host must fail loudly,
+        // not silently produce a testnet-configured app handling real money.
+        'network' => env('STELLAR_NETWORK'),
+        'rpc_url' => env('STELLAR_RPC_URL'),
         'contract_id' => env('STELLAR_CONTRACT_ID'),
         // Path to the `stellar` CLI used to assemble/simulate invocations.
         'cli' => env('STELLAR_CLI', 'stellar'),
+        // PUBLIC address (G...) used as the source for read-only simulations.
+        // Must never be a secret: CLI args are visible to other local processes.
+        'read_source' => env('STELLAR_READ_SOURCE'),
         // The backend scheduler's own key, used ONLY for trigger_payout (which
         // needs no user authority). Never a user's key. Leave unset to disable
         // backend-initiated payouts.

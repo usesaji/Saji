@@ -425,7 +425,9 @@ export const wallet = {
 	 * so it appears in history. The backend records the real on-chain hash.
 	 */
 	logWithdrawal(input: {
-		tx_hash: string;
+		/** Omitted when the contract call itself settled the transfer (a payout
+		 *  claimed straight to the destination has no separate payment hash). */
+		tx_hash?: string;
 		amount: string | number;
 		asset_code: string;
 	}): Promise<Transaction> {

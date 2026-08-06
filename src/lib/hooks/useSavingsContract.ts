@@ -7,10 +7,21 @@ import {
 	PayoutOrder,
 	LatePenalty,
 } from "../contract/client";
+import { toStroops as parseStroops } from "../stroops";
 
-/** 7-dp decimal string / number → i128 stroops (bigint). */
+/**
+ * 7-dp decimal string / number → i128 stroops (bigint), parsed digit-wise.
+ *
+ * Never multiply a float by 1e7 here: this value is baked into the on-chain
+ * group config permanently, and float error would set a contribution amount
+ * that differs from what the organizer typed.
+ */
 function toStroops(amount: string | number): bigint {
-	return BigInt(Math.round(Number(amount) * 10_000_000));
+	const stroops = parseStroops(amount);
+	if (stroops === null || stroops <= 0n) {
+		throw new Error(`Invalid amount: "${amount}"`);
+	}
+	return stroops;
 }
 
 const PAYOUT_ORDER: Record<string, PayoutOrder> = {
@@ -298,25 +309,29 @@ export function useSavingsContract() {
 		[requireAddress],
 	);
 
-	/** Amount (stroops) the member can claim from a group. Read-only. */
+	/**
+	 * Amount (stroops) the member can claim from a group. Read-only.
+	 *
+	 * THROWS on a failed read rather than returning 0. This is the sole source of
+	 * the Saji Balance, so swallowing the error would render a transient RPC
+	 * outage as "you have no money" — hiding the Withdraw button and telling a
+	 * user with a real payout that they have none. Callers must surface the
+	 * failure as a network error, never as a zero balance.
+	 */
 	const claimableOf = useCallback(
 		async (
 			onchainGroupId: bigint | number,
 			memberAddress: string,
 		): Promise<bigint> => {
-			try {
-				const addr = (await currentAddress()) ?? undefined;
-				const client = savingsClient(
-					addr ?? "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF5",
-				);
-				const tx = await client.claimable_of({
-					group_id: BigInt(onchainGroupId),
-					member: memberAddress,
-				});
-				return (tx.result as bigint) ?? BigInt(0);
-			} catch {
-				return BigInt(0);
-			}
+			const addr = (await currentAddress()) ?? undefined;
+			const client = savingsClient(
+				addr ?? "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF5",
+			);
+			const tx = await client.claimable_of({
+				group_id: BigInt(onchainGroupId),
+				member: memberAddress,
+			});
+			return (tx.result as bigint) ?? BigInt(0);
 		},
 		[],
 	);

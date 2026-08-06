@@ -9,6 +9,7 @@ import { useApi } from "./useApi";
 import { useSavingsContract } from "./useSavingsContract";
 import { spendableBalance } from "../wallet";
 import { TOKENS } from "../contract/tokens";
+import { toStroopsOrZero } from "../stroops";
 
 /**
  * One asset's withdrawable position, split by WHERE the money currently sits.
@@ -20,18 +21,19 @@ import { TOKENS } from "../contract/tokens";
  */
 export type SajiAsset = {
 	asset_code: string;
-	/** Escrowed in circles — needs a claim signature to release. */
-	claimable_total: number;
-	/** Already in the user's wallet (XLM is net of the base reserve). */
-	wallet_total: number;
+	/** Escrowed in circles — needs a claim signature to release. Stroops. */
+	claimable_total: bigint;
+	/** Already in the user's wallet, net of the XLM reserve. Stroops. */
+	wallet_total: bigint;
 	/** claimable_total + wallet_total — the full withdrawable amount. */
-	total: number;
+	total: bigint;
 	claimables: {
 		group_id: number;
 		onchain_group_id: number;
 		group_name: string;
 		asset_code: string;
-		amount: string;
+		/** Stroops. */
+		amount: bigint;
 	}[];
 };
 
@@ -39,6 +41,12 @@ export type SajiBalance = {
 	/** Only assets with something withdrawable. */
 	assets: SajiAsset[];
 	loading: boolean;
+	/**
+	 * The balance could NOT be read (RPC/Horizon failure). Callers must show this
+	 * as a network problem — never as a zero balance, which would tell a user
+	 * with a real payout that their money is gone.
+	 */
+	error: string | null;
 	/** A Stellar address was resolvable (wallet linked). */
 	linked: boolean;
 	/** Anything withdrawable at all — gates the Withdraw CTA. */
@@ -75,6 +83,7 @@ export function useSajiBalance(): SajiBalance {
 
 	const [assets, setAssets] = useState<SajiAsset[]>([]);
 	const [loading, setLoading] = useState(true);
+	const [error, setError] = useState<string | null>(null);
 
 	const address = myCircles?.stellar_address ?? me?.stellar_address ?? null;
 
@@ -93,57 +102,74 @@ export function useSajiBalance(): SajiBalance {
 				return;
 			}
 			setLoading(true);
+			setError(null);
 
 			const byAsset = new Map<string, SajiAsset>();
 			const entryFor = (code: string) => {
 				const e = byAsset.get(code) ?? {
 					asset_code: code,
-					claimable_total: 0,
-					wallet_total: 0,
-					total: 0,
+					claimable_total: 0n,
+					wallet_total: 0n,
+					total: 0n,
 					claimables: [],
 				};
 				byAsset.set(code, e);
 				return e;
 			};
 
-			await Promise.all(
-				circles.map(async (c) => {
-					const stroops = await claimableOf(c.onchain_group_id, addr);
-					const amt = Number(stroops) / 10_000_000;
-					if (amt <= 0) return;
-					const entry = entryFor(c.asset_code);
-					entry.claimable_total += amt;
-					entry.claimables.push({
-						group_id: c.group_id,
-						onchain_group_id: c.onchain_group_id,
-						group_name: c.group_name,
-						asset_code: c.asset_code,
-						amount: amt.toFixed(7),
-					});
-				}),
-			);
+			try {
+				await Promise.all(
+					circles.map(async (c) => {
+						const stroops = await claimableOf(c.onchain_group_id, addr);
+						if (stroops <= 0n) return;
+						const entry = entryFor(c.asset_code);
+						entry.claimable_total += stroops;
+						entry.claimables.push({
+							group_id: c.group_id,
+							onchain_group_id: c.onchain_group_id,
+							group_name: c.group_name,
+							asset_code: c.asset_code,
+							amount: stroops,
+						});
+					}),
+				);
 
-			// A payout the user already claimed but hasn't sent out is still
-			// withdrawable — without this, a claim that succeeded while its
-			// transfer failed would leave the money invisible.
-			//
-			// But ONLY that: bounded by what Saji actually paid and the user
-			// hasn't withdrawn (`owed`). Counting the raw wallet balance would
-			// offer to send funds the user put there themselves.
-			for (const a of payoutSummary?.assets ?? []) {
-				const owed = Number(a.owed);
-				if (owed <= 0 || !(a.asset_code in TOKENS)) continue;
-				const spendable = await spendableBalance(addr, a.asset_code);
-				const inWallet = Math.min(owed, spendable);
-				if (inWallet > 0) entryFor(a.asset_code).wallet_total = inWallet;
+				// A payout the user already claimed but hasn't sent out is still
+				// withdrawable — without this, a claim that succeeded while its
+				// transfer failed would leave the money invisible.
+				//
+				// But ONLY that: bounded by what Saji actually paid and the user
+				// hasn't withdrawn (`owed`). Counting the raw wallet balance would
+				// offer to send funds the user put there themselves.
+				const owedAssets = (payoutSummary?.assets ?? []).filter(
+					(a) => a.asset_code in TOKENS && toStroopsOrZero(a.owed) > 0n,
+				);
+				const spendables = await Promise.all(
+					owedAssets.map((a) => spendableBalance(addr, a.asset_code)),
+				);
+				owedAssets.forEach((a, i) => {
+					const owed = toStroopsOrZero(a.owed);
+					const inWallet = owed < spendables[i] ? owed : spendables[i];
+					if (inWallet > 0n) entryFor(a.asset_code).wallet_total = inWallet;
+				});
+			} catch (err) {
+				if (cancelled?.()) return;
+				// A read failed. Report it as a network problem — showing 0 here
+				// would tell a user with a real payout that they have nothing.
+				setError(
+					err instanceof Error && err.message
+						? err.message
+						: "Couldn't reach the Stellar network to read your balance.",
+				);
+				setLoading(false);
+				return;
 			}
 
 			if (cancelled?.()) return;
 			for (const a of byAsset.values()) {
 				a.total = a.claimable_total + a.wallet_total;
 			}
-			setAssets([...byAsset.values()].filter((a) => a.total > 0));
+			setAssets([...byAsset.values()].filter((a) => a.total > 0n));
 			setLoading(false);
 		},
 		[myCircles, me?.stellar_address, claimableOf, payoutSummary],
@@ -160,8 +186,9 @@ export function useSajiBalance(): SajiBalance {
 	return {
 		assets,
 		loading,
+		error,
 		linked: !!address,
-		hasWithdrawable: assets.some((a) => a.total > 0),
+		hasWithdrawable: assets.some((a) => a.total > 0n),
 		address,
 		refresh: load,
 	};

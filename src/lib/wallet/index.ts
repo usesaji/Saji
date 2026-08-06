@@ -19,9 +19,17 @@ import { AlbedoModule } from "@creit.tech/stellar-wallets-kit/modules/albedo";
 import { xBullModule } from "@creit.tech/stellar-wallets-kit/modules/xbull";
 import { LobstrModule } from "@creit.tech/stellar-wallets-kit/modules/lobstr";
 import { HanaModule } from "@creit.tech/stellar-wallets-kit/modules/hana";
+import {
+	HORIZON_URL as NETWORK_HORIZON_URL,
+	IS_MAINNET,
+	NETWORK_PASSPHRASE as NETWORK_PASSPHRASE_FOR_NETWORK,
+} from "../stellar-network";
+import { toStroopsOrZero } from "../stroops";
 
-// Network must match the backend (STELLAR_NETWORK). Testnet for now.
-export const NETWORK_PASSPHRASE = Networks.TESTNET;
+// Network comes from NEXT_PUBLIC_STELLAR_NETWORK (see lib/stellar-network).
+// This signs every payment and trustline, so it MUST match the network the
+// user's wallet is on — a mismatch produces signatures the network rejects.
+export const NETWORK_PASSPHRASE = NETWORK_PASSPHRASE_FOR_NETWORK;
 
 let initialized = false;
 
@@ -29,7 +37,7 @@ let initialized = false;
 function ensureInit(): void {
 	if (initialized) return;
 	StellarWalletsKit.init({
-		network: Networks.TESTNET,
+		network: IS_MAINNET ? Networks.PUBLIC : Networks.TESTNET,
 		modules: [
 			new FreighterModule(),
 			new AlbedoModule(),
@@ -84,8 +92,8 @@ export async function signXdr(unsignedXdr: string): Promise<string> {
 	return signedTxXdr;
 }
 
-/** Horizon endpoint matching NETWORK_PASSPHRASE (testnet for now). */
-const HORIZON_URL = "https://horizon-testnet.stellar.org";
+/** Horizon endpoint matching NETWORK_PASSPHRASE (see lib/stellar-network). */
+const HORIZON_URL = NETWORK_HORIZON_URL;
 
 /** A wallet's balance per asset code, read from Horizon in the BROWSER. */
 export type WalletBalances = Record<string, number>;
@@ -169,20 +177,29 @@ function describeSubmitError(err: unknown, ctx: { code: string }): Error {
 }
 
 /**
- * How much of `code` this account can actually SEND right now.
+ * How much of `code` this account can actually SEND right now, in stroops.
  *
  * For issued assets that's simply the balance. For native XLM it is not: every
  * account must retain a base reserve (1 XLM + 0.5 per subentry, e.g. each
  * trustline) plus the transaction fee. Sending the full balance is rejected
- * with `op_underfunded`, so "Max" has to mean balance-minus-reserve, not
- * balance. Returns 0 when nothing is spendable.
+ * with `op_underfunded`, so "Max" has to mean balance-minus-reserve.
+ *
+ * THROWS if Horizon can't be reached. Returning 0 on failure would be
+ * indistinguishable from an empty wallet, which on the withdraw screen renders
+ * as "No spendable USDC in your wallet" — a false statement about the user's
+ * money. Callers must surface the network error instead.
  */
 export async function spendableBalance(
 	address: string,
 	code: string,
-): Promise<number> {
+): Promise<bigint> {
 	const res = await fetch(`${HORIZON_URL}/accounts/${address}`);
-	if (!res.ok) return 0;
+	if (res.status === 404) return 0n; // account genuinely doesn't exist yet
+	if (!res.ok) {
+		throw new Error(
+			`Couldn't read your balance from the network (Horizon ${res.status}).`,
+		);
+	}
 	const account: {
 		balances?: { asset_type?: string; asset_code?: string; balance?: string }[];
 		subentry_count?: number;
@@ -191,12 +208,17 @@ export async function spendableBalance(
 	const entry = (account.balances ?? []).find((b) =>
 		code === "XLM" ? b.asset_type === "native" : b.asset_code === code,
 	);
-	const balance = Number(entry?.balance ?? 0);
-	if (code !== "XLM") return Math.max(0, balance);
+	const balance = toStroopsOrZero(entry?.balance ?? "0");
+	if (code !== "XLM") return balance > 0n ? balance : 0n;
 
-	// 1 XLM base + 0.5 per subentry, plus headroom for the fee.
-	const reserve = 1 + 0.5 * (account.subentry_count ?? 0) + 0.01;
-	return Math.max(0, balance - reserve);
+	// 1 XLM base + 0.5 per subentry, plus headroom for the fee — in stroops so
+	// the subtraction is exact.
+	const reserve =
+		10_000_000n +
+		5_000_000n * BigInt(account.subentry_count ?? 0) +
+		100_000n;
+	const spendable = balance - reserve;
+	return spendable > 0n ? spendable : 0n;
 }
 
 /**

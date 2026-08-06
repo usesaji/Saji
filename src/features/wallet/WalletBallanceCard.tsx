@@ -48,12 +48,16 @@ export const WalletCard = () => {
 
 	// Headline: prompt to link when no wallet; the selected currency's live
 	// balance otherwise (0 if the wallet holds none of that asset).
-	const selectedCode = currency ?? "USDC";
+	//
+	// `balances` is keyed by Horizon's UPPERCASE asset codes, so the selector's
+	// values must be uppercase too — a lowercase code here looks up `undefined`
+	// and renders a real balance as zero.
+	const selectedCode = (currency ?? "USDC").toUpperCase();
 	const balanceText = !linkedAddress
 		? "Link wallet"
 		: balances === null
 			? "…"
-			: formatMoney(String(balances[selectedCode] ?? 0));
+			: formatMoney(String(balances[selectedCode] ?? 0), selectedCode);
 
 	return (
 		<div className="bg-primary text-white rounded-[20px] p-5 flex relative flex-col gap-11 overflow-hidden ">

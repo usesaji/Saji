@@ -25,7 +25,7 @@ class ChallengeController extends Controller
         $this->assertChallengeMember($request, $group);
 
         $data = $request->validate([
-            'amount' => ['required', 'numeric', 'min:0.0000001'],
+            'amount' => ['required', 'numeric', 'min:0.0000001', 'max:1000000000', 'decimal:0,7'],
             // The on-chain transfer that backs this save (required — a challenge
             // save must correspond to real movement, per the on-chain design).
             'stellar_tx_hash' => ['required', 'string', 'max:255', 'unique:challenge_deposits,stellar_tx_hash'],

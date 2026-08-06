@@ -28,7 +28,8 @@ import {
 	spendableBalance,
 	withdrawToken,
 } from "@/lib/wallet";
-import { tokenFor } from "@/lib/contract/tokens";
+import { requireToken } from "@/lib/contract/tokens";
+import { formatStroops, fromStroops, toStroopsOrZero } from "@/lib/stroops";
 import { pageRoutes } from "@/config/routes";
 
 const STELLAR_ADDR = /^G[A-Z2-7]{55}$/;
@@ -57,6 +58,7 @@ export default function WithdrawPage() {
 	const {
 		assets: earningAssets,
 		loading,
+		error: balanceError,
 		refresh,
 	} = useSajiBalance();
 
@@ -83,7 +85,9 @@ export default function WithdrawPage() {
 		earningAssets.find((a) => a.asset_code === asset) ?? earningAssets[0];
 	const selectedCode = selected?.asset_code ?? "XLM";
 	// Withdrawable = what's still locked in circles + what's already in the wallet.
-	const available = Number(selected?.total ?? 0);
+	// Stroops throughout: this drives an irreversible transfer, and float error
+	// of even one stroop changes which code path runs (see `claimDirect`).
+	const available = selected?.total ?? 0n;
 
 	const [amount, setAmount] = useState("");
 	const [destId, setDestId] = useState<number | null>(null);
@@ -91,11 +95,14 @@ export default function WithdrawPage() {
 	const [errorMsg, setErrorMsg] = useState("");
 	// What actually went out — can be less than requested if the XLM reserve
 	// capped it, so the success screen must not quote the requested amount.
-	const [sentAmount, setSentAmount] = useState("");
+	const [sentAmount, setSentAmount] = useState(0n);
 	// Total released from circles by this withdrawal. When it exceeds what was
 	// sent, the surplus landed in the user's wallet and the success screen has to
 	// say so — otherwise their Saji Balance appears to move for no reason.
-	const [claimedAmount, setClaimedAmount] = useState(0);
+	const [claimedAmount, setClaimedAmount] = useState(0n);
+	// Set when the on-chain transfer succeeded but Saji's ledger didn't record
+	// it — the money moved, so this is a warning, not a failure.
+	const [ledgerWarning, setLedgerWarning] = useState("");
 
 	// Add-destination modal.
 	const [showAdd, setShowAdd] = useState(false);
@@ -108,26 +115,60 @@ export default function WithdrawPage() {
 		savedDests?.find((d) => d.is_primary) ??
 		savedDests?.[0] ??
 		null;
-	const amountNum = Number(amount) || 0;
-	const overBalance = amountNum > available;
+	const amountStroops = toStroopsOrZero(amount);
+	const overBalance = amountStroops > available;
 	// Withdrawing to your OWN wallet is fine and common — your earnings live in
 	// the contract (claimable), not your wallet, so "withdraw to my wallet" just
 	// means "claim my earnings home". No self-destination block.
-	const canConfirm = amountNum > 0 && !overBalance && !!dest && !!selected;
+	const canConfirm =
+		amountStroops > 0n && !overBalance && !!dest && !!selected;
 
 	// Quick-amount chips. The design shows fixed denominations (₦15,000 …), but a
 	// claimable payout is an arbitrary on-chain amount — a fixed chip would often
 	// exceed it and be dead. So these are fractions of what's actually available,
 	// which always produce a valid amount.
 	const chips = [
-		{ label: "25%", value: available * 0.25 },
-		{ label: "50%", value: available * 0.5 },
-		{ label: "75%", value: available * 0.75 },
-	].filter((c) => c.value > 0);
+		{ label: "25%", value: available / 4n },
+		{ label: "50%", value: available / 2n },
+		{ label: "75%", value: (available * 3n) / 4n },
+	].filter((c) => c.value > 0n);
+
+	/**
+	 * Record a completed withdrawal in Saji's ledger.
+	 *
+	 * The transfer has ALREADY happened on-chain by the time this runs, so a
+	 * silent failure here leaves the backend believing the money is still
+	 * withdrawable — which inflates the next balance and lets the user try to
+	 * spend it twice. Retried once, then surfaced as a warning rather than
+	 * swallowed; the funds moved either way, so this must not fail the flow.
+	 */
+	const logWithdrawalSafely = async (entry: {
+		tx_hash?: string;
+		amount: bigint;
+		asset_code: string;
+	}) => {
+		const payload = {
+			tx_hash: entry.tx_hash,
+			amount: fromStroops(entry.amount),
+			asset_code: entry.asset_code,
+		};
+		try {
+			await walletApi.logWithdrawal(payload);
+		} catch {
+			try {
+				await walletApi.logWithdrawal(payload);
+			} catch {
+				setLedgerWarning(
+					"Your withdrawal went through on-chain, but we couldn't record it in your history. Your balance here may look higher than it is until it syncs.",
+				);
+			}
+		}
+	};
 
 	const confirm = async () => {
 		if (!selected || !dest) return;
 		setErrorMsg("");
+		setLedgerWarning("");
 		setPhase("processing");
 		try {
 			const from = me?.stellar_address ?? (await currentAddress()) ?? null;
@@ -135,7 +176,7 @@ export default function WithdrawPage() {
 				throw new Error(
 					"No wallet address on your account yet — add one in your profile to receive payouts.",
 				);
-			const token = tokenFor(selectedCode);
+			const token = requireToken(selectedCode);
 			const to = dest.stellar_address;
 
 			// The contract pays the DESTINATION directly, so it's the destination
@@ -150,47 +191,58 @@ export default function WithdrawPage() {
 				}
 			}
 
-			const walletHas = Number(selected.wallet_total ?? 0);
+			const walletHas = selected.wallet_total;
 			// A circle payout releases in FULL — claim_payout takes no amount. So a
 			// partial withdrawal can't be claimed straight out to the destination
 			// without overshooting. Two paths:
-			//   • full amount  → claim direct to destination (ONE signature, no hop)
-			//   • partial      → claim home, then send exactly what was asked
-			const claimsNeeded = amountNum - walletHas > 0;
-			const wholeClaimable =
-				amountNum >= Number(selected.total ?? 0) - 0.0000001;
-			const claimDirect = claimsNeeded && wholeClaimable && walletHas <= 0;
+			//   • whole balance → claim direct to destination (ONE signature, no hop)
+			//   • partial       → claim home, then send exactly what was asked
+			// All comparisons are exact stroops: with floats, an amount a single
+			// stroop under the total could flip this and send MORE than requested
+			// to an external address, irreversibly.
+			const claimsNeeded = amountStroops > walletHas;
+			const wholeBalance = amountStroops >= selected.total;
+			const claimDirect = claimsNeeded && wholeBalance && walletHas === 0n;
 
-			let claimed = 0;
-			let needed = amountNum - walletHas;
+			let claimed = 0n;
+			let needed = amountStroops - walletHas;
 			if (claimsNeeded) {
 				// Largest circles first keeps the signature count down.
-				const byLargest = [...selected.claimables].sort(
-					(a, b) => Number(b.amount) - Number(a.amount),
+				const byLargest = [...selected.claimables].sort((a, b) =>
+					b.amount === a.amount ? 0 : b.amount > a.amount ? 1 : -1,
 				);
 				for (const c of byLargest) {
-					if (needed <= 0) break;
-					const stroops = await claimPayout(
-						c.onchain_group_id,
-						claimDirect ? to : from,
-					);
-					const got = Number(stroops) / 10_000_000;
-					claimed += got;
-					needed -= got;
+					if (needed <= 0n) break;
+					try {
+						const got = await claimPayout(
+							c.onchain_group_id,
+							claimDirect ? to : from,
+						);
+						claimed += got;
+						needed -= got;
+					} catch (err) {
+						// A claim failed PART WAY through. Anything already claimed has
+						// irreversibly left escrow, so surface that instead of implying
+						// nothing happened.
+						if (claimed > 0n) {
+							setClaimedAmount(claimed);
+							throw new Error(
+								`${formatStroops(claimed)} ${selectedCode} was released into your wallet, but the rest could not be claimed. It is safe — withdraw it from your Saji Balance. (${err instanceof Error ? err.message : "unknown error"})`,
+							);
+						}
+						throw err;
+					}
 				}
 			}
-			setClaimedAmount(claimDirect ? 0 : claimed);
+			setClaimedAmount(claimDirect ? 0n : claimed);
 
 			if (claimDirect) {
 				// The contract already paid the destination — nothing left to send.
-				walletApi
-					.logWithdrawal({
-						tx_hash: "",
-						amount: claimed.toFixed(7),
-						asset_code: selectedCode,
-					})
-					.catch(() => {});
-				setSentAmount(claimed.toFixed(7));
+				await logWithdrawalSafely({
+					amount: claimed,
+					asset_code: selectedCode,
+				});
+				setSentAmount(claimed);
 				setPhase("completed");
 				refresh();
 				return;
@@ -201,29 +253,28 @@ export default function WithdrawPage() {
 			// account must retain its base reserve + fee, so sending everything
 			// would fail op_underfunded — clamp to what's actually spendable.
 			const spendable = await spendableBalance(from, selectedCode);
-			if (spendable <= 0) {
+			if (spendable <= 0n) {
 				throw new Error(
 					selectedCode === "XLM"
 						? "Your XLM balance is fully committed to the account reserve. Keep a little more XLM in your wallet to cover the reserve and fee."
 						: `No spendable ${selectedCode} in your wallet.`,
 				);
 			}
-			const sendAmount = Math.min(amountNum, spendable).toFixed(7);
+			const sendAmount =
+				amountStroops < spendable ? amountStroops : spendable;
 
 			const hash = await withdrawToken({
 				from,
 				to,
-				amount: sendAmount,
+				amount: fromStroops(sendAmount),
 				code: selectedCode,
 				issuer: token.issuer,
 			});
-			walletApi
-				.logWithdrawal({
-					tx_hash: hash,
-					amount: sendAmount,
-					asset_code: selectedCode,
-				})
-				.catch(() => {});
+			await logWithdrawalSafely({
+				tx_hash: hash,
+				amount: sendAmount,
+				asset_code: selectedCode,
+			});
 
 			setSentAmount(sendAmount);
 			setPhase("completed");
@@ -242,6 +293,9 @@ export default function WithdrawPage() {
 							: raw || "The withdrawal could not be completed.",
 			);
 			setPhase("failed");
+			// Refresh regardless: a claim may have succeeded before the failure, so
+			// the balance on screen must reflect where the money actually is.
+			refresh();
 		}
 	};
 
@@ -256,9 +310,8 @@ export default function WithdrawPage() {
 							<div className="mx-auto h-16 w-16 animate-spin rounded-full border-4 border-primary border-t-transparent" />
 							<h2 className="mt-6 text-xl font-medium">Processing withdrawal</h2>
 							<p className="mt-2 text-sm text-muted-foreground">
-								Approve the transaction{claimedAmount > 0 ? "s" : ""} when
-								prompted — we&apos;re releasing your payout and sending it to
-								your destination.
+								Approve the transactions when prompted — we&apos;re releasing
+								your payout and sending it to your destination.
 							</p>
 						</>
 					)}
@@ -269,10 +322,10 @@ export default function WithdrawPage() {
 							</div>
 							<h2 className="mt-6 text-xl font-medium">Withdrawal Completed</h2>
 							<p className="mt-2 text-sm text-muted-foreground">
-								{Number(sentAmount || amount).toLocaleString()} {selectedCode} is
-								on its way to your destination.
+								{formatStroops(sentAmount)} {selectedCode} is on its way to your
+								destination.
 							</p>
-							{Number(sentAmount) < Number(amount) && (
+							{sentAmount < amountStroops && (
 								<p className="mt-2 text-xs text-muted-foreground">
 									Slightly less than you asked for — your account has to keep a
 									small XLM reserve on-chain.
@@ -281,16 +334,16 @@ export default function WithdrawPage() {
 							{/* A circle payout releases in full, so a partial withdrawal
 							    leaves the remainder in the user's wallet. Say so, or their
 							    Saji Balance looks like it moved for no reason. */}
-							{claimedAmount - Number(sentAmount) > 0.0000001 && (
+							{claimedAmount > sentAmount && (
 								<p className="mt-3 text-xs text-muted-foreground">
-									The other{" "}
-									{Number(
-										(claimedAmount - Number(sentAmount)).toFixed(7),
-									).toLocaleString()}{" "}
+									The other {formatStroops(claimedAmount - sentAmount)}{" "}
 									{selectedCode} was released into your wallet and is still in
 									your Saji Balance — withdraw it anytime, no extra approval
 									needed.
 								</p>
+							)}
+							{ledgerWarning && (
+								<p className="mt-3 text-xs text-warning-800">{ledgerWarning}</p>
 							)}
 							<Button
 								href={pageRoutes.dashboardRoutes.WALLET}
@@ -330,6 +383,18 @@ export default function WithdrawPage() {
 
 			{loading ? (
 				<p className="mt-6 text-sm text-muted-foreground">Loading…</p>
+			) : balanceError ? (
+				/* A failed read must NOT look like an empty balance — that would tell
+				   a user with a real payout that their money is gone. */
+				<div className="mt-4 rounded-2xl bg-[#fff4f4] p-6 text-center text-sm">
+					<p className="text-error-500">{balanceError}</p>
+					<p className="mt-1 text-xs text-muted-foreground">
+						Your funds are safe on-chain — we just couldn&apos;t read them.
+					</p>
+					<button onClick={refresh} className="mt-3 font-medium underline">
+						Try again
+					</button>
+				</div>
 			) : earningAssets.length === 0 ? (
 				<div className="mt-4 rounded-2xl bg-[#f7f7f7] p-6 text-center text-sm text-muted-foreground">
 					Nothing to withdraw yet. Circle payouts and any balance in your wallet
@@ -360,7 +425,7 @@ export default function WithdrawPage() {
 								>
 									{a.asset_code}
 									<span className="ml-2 font-light text-muted-foreground">
-										{Number(a.total).toLocaleString()}
+										{formatStroops(a.total)}
 									</span>
 								</button>
 							);
@@ -388,18 +453,20 @@ export default function WithdrawPage() {
 						/>
 					</div>
 					<p className="mt-2 text-xs font-light text-muted-foreground">
-						Available: {available.toLocaleString()} {selectedCode}
+						Available: {formatStroops(available)} {selectedCode}
 					</p>
 					<div className="mt-3 flex flex-wrap gap-2">
 						{chips.map((c) => {
-							const v = Number(c.value.toFixed(7));
+							// Exact decimal string — a float here (e.g. 0.30000000000000004)
+							// would land in the input and read as over-balance.
+							const v = fromStroops(c.value);
 							return (
 								<button
 									key={c.label}
 									type="button"
-									onClick={() => setAmount(String(v))}
+									onClick={() => setAmount(v)}
 									className={`rounded-full px-4 py-1.5 text-sm transition-colors ${
-										amount === String(v)
+										amount === v
 											? "bg-primary text-white"
 											: "bg-[#efeaff] text-primary hover:bg-[#e4dcff]"
 									}`}
@@ -410,9 +477,9 @@ export default function WithdrawPage() {
 						})}
 						<button
 							type="button"
-							onClick={() => setAmount(String(available))}
+							onClick={() => setAmount(fromStroops(available))}
 							className={`rounded-full px-4 py-1.5 text-sm transition-colors ${
-								amount === String(available)
+								amount === fromStroops(available)
 									? "bg-primary text-white"
 									: "bg-[#efeaff] text-primary hover:bg-[#e4dcff]"
 							}`}
@@ -422,7 +489,7 @@ export default function WithdrawPage() {
 					</div>
 					{overBalance && (
 						<p className="mt-2 text-xs text-error-500">
-							That&apos;s more than your available {available.toLocaleString()}{" "}
+							That&apos;s more than your available {formatStroops(available)}{" "}
 							{selectedCode}.
 						</p>
 					)}
@@ -504,7 +571,7 @@ export default function WithdrawPage() {
 						<div className="flex items-center justify-between font-medium">
 							<span>You withdraw</span>
 							<span>
-								{(amountNum || 0).toLocaleString()} {selectedCode}
+								{formatStroops(amountStroops)} {selectedCode}
 							</span>
 						</div>
 					</div>
