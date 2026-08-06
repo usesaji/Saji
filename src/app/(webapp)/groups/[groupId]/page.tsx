@@ -20,6 +20,7 @@ import { useSavingsContract } from "@/lib/hooks/useSavingsContract";
 import { requireToken } from "@/lib/contract/tokens";
 import { addTrustline } from "@/lib/wallet";
 import { toast } from "@/lib/utils/toast";
+import { displayError, errorMessage } from "@/lib/errors";
 
 
 export default function GroupPreviewPage() {
@@ -347,7 +348,10 @@ export default function GroupPreviewPage() {
 			toast.success("Your contribution is on-chain.", "Contribution sent");
 			refetch();
 		} catch (err) {
-			const raw = err instanceof Error ? err.message : "";
+			// Not `err instanceof Error ? err.message : ""` — a non-Error throw
+			// would blank the message, skip every branch below, and surface as a
+			// bare "Something went wrong" with the real detail lost.
+			const raw = errorMessage(err);
 
 			// Translate the common on-chain contribute failures into plain guidance.
 			if (/trustline entry is missing|no trust/i.test(raw)) {
@@ -369,7 +373,9 @@ export default function GroupPreviewPage() {
 				toast.error("You cancelled the signature.", "Cancelled");
 			} else {
 				toast.error(
-					err instanceof ApiError ? err.message : raw || "Something went wrong.",
+					err instanceof ApiError
+						? err.message
+						: displayError(err, "Something went wrong."),
 					"Could not contribute",
 				);
 			}

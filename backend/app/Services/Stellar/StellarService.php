@@ -558,7 +558,9 @@ class StellarService
         // after the sub-command for any `contract` invocation.
         $args = $this->withNetworkFlags($args);
 
-        $result = Process::timeout(120)->run(array_merge([$binary], $args));
+        $result = Process::timeout(120)
+            ->env($this->processEnv())
+            ->run(array_merge([$binary], $args));
 
         if (! $result->successful()) {
             throw new RuntimeException(
@@ -600,6 +602,36 @@ class StellarService
         }
 
         return $out;
+    }
+
+    /**
+     * Extra environment for the CLI process — only the temp-directory vars.
+     *
+     * On Windows, Symfony\Process writes each pipe to a temp file chosen from
+     * TMP/TEMP/TMPDIR. Under a service account (or `php artisan serve` started
+     * from a context with none of them set) that resolves to C:\Windows, which
+     * isn't writable, and EVERY CLI call dies with:
+     *
+     *   fopen(C:\Windows\sf_proc_00.out.lock): Permission denied
+     *
+     * Laravel MERGES this array into the inherited environment rather than
+     * replacing it, so PATH and the DNS resolver config survive — see the note
+     * on `stellar()` about why a full env replacement must be avoided here.
+     *
+     * @return array<string,string>
+     */
+    private function processEnv(): array
+    {
+        $tmp = sys_get_temp_dir();
+
+        if ($tmp === '' || ! is_dir($tmp) || ! is_writable($tmp)) {
+            $tmp = storage_path('app/tmp');
+            if (! is_dir($tmp)) {
+                mkdir($tmp, 0775, true);
+            }
+        }
+
+        return ['TMP' => $tmp, 'TEMP' => $tmp, 'TMPDIR' => $tmp];
     }
 
     private function assertConfigured(): void

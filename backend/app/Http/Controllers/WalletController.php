@@ -301,8 +301,12 @@ class WalletController extends Controller
 
         // Confirmed payouts, grouped by the paying circle's asset.
         $paid = Payout::query()
-            ->where('recipient_id', $user->id)
-            ->where('status', 'confirmed')
+            // Both `payouts` and `groups` have a `status` column, so every
+            // column here must be table-qualified — an unqualified `status`
+            // after the join fails outright with "ambiguous column name",
+            // 500ing the whole withdraw screen.
+            ->where('payouts.recipient_id', $user->id)
+            ->where('payouts.status', 'confirmed')
             ->join('groups', 'groups.id', '=', 'payouts.group_id')
             ->groupBy('groups.asset_code')
             ->selectRaw('groups.asset_code as asset_code, SUM(payouts.net_amount) as total')

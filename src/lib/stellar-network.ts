@@ -47,8 +47,30 @@ export const SOROBAN_RPC_URL = required(
 	"https://soroban-testnet.stellar.org",
 );
 
-/** The deployed Saji savings contract for this network. */
+/**
+ * The deployed Saji savings contract (rotating circles) for this network.
+ *
+ * MUST match the backend's `STELLAR_CONTRACT_ID`. When the two disagree the
+ * browser signs calls against a contract that doesn't hold the groups, which
+ * surfaces as "#1 GroupNotFound" — an error that reads like missing data rather
+ * than misconfiguration, and costs an hour to trace. Redeploying the contract
+ * means updating BOTH.
+ */
 export const SAVINGS_CONTRACT_ID = required(
 	"NEXT_PUBLIC_SAVINGS_CONTRACT_ID",
-	"CCJVEADU3PCABQUSWCQD473WC3ZXHIO2TJ2ENWNGFBE4ZOJ44YBZG3KK",
+	"CA3YEH744GMHOKALGS4YXFYXF3LT6XEPL5EPUF6DDWBJC2IDOFTT5LVT",
+);
+
+/**
+ * The deployed Saji challenge contract (public savings) for this network.
+ *
+ * Deliberately a SEPARATE contract from savings: a contract has one token
+ * balance however many storage keys it keeps, so hosting the challenge's
+ * unconditional withdrawal path alongside circle escrow would point it at the
+ * pool holding everyone's rotating savings. Separate address ⇒ separate
+ * balance ⇒ a bug in one cannot reach the other's funds.
+ */
+export const CHALLENGE_CONTRACT_ID = required(
+	"NEXT_PUBLIC_CHALLENGE_CONTRACT_ID",
+	"CCOVZRUF5SOFVF26G4PKTESVTOXJ3IB6LAVHLEZTSBS3E6OEDHR7Q5JD",
 );

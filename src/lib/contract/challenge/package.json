@@ -1,0 +1,12 @@
+{
+  "version": "0.0.0",
+  "name": "challenge",
+  "type": "module",
+  "//": "Generated Soroban bindings, consumed DIRECTLY from src/ by the Next.js build (see src/lib/contract/client.ts). `exports`/`typings` deliberately point at the TypeScript source rather than a compiled ./dist: no dist is ever built here, and a stale one would silently win for bare-specifier imports — which is exactly how the savings claim_payout spec drifted out of sync with the deployed contract. Do not add a build step without removing this package from the app's source tree.",
+  "exports": "./src/index.ts",
+  "typings": "./src/index.ts",
+  "dependencies": {
+    "@stellar/stellar-sdk": "^16.2.0",
+    "buffer": "6.0.3"
+  }
+}

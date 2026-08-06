@@ -23,6 +23,7 @@ import { useLiveCircle } from "@/lib/hooks/useLiveCircle";
 import { requireToken } from "@/lib/contract/tokens";
 import { addTrustline } from "@/lib/wallet";
 import { toast } from "@/lib/utils/toast";
+import { displayError, errorMessage } from "@/lib/errors";
 
 const AVATAR = "/images/user.jpg";
 
@@ -155,7 +156,9 @@ export default function CircleDashboardPage() {
 			// process, so refetch once more shortly to pull those in.
 			setTimeout(() => refetch(), 6000);
 		} catch (err) {
-			const raw = err instanceof Error ? err.message : "";
+			// See errorMessage: a non-Error throw must not collapse to "" and
+			// bypass the specific guidance below.
+			const raw = errorMessage(err);
 
 			if (/trustline entry is missing|no trust/i.test(raw)) {
 				toast.error(
@@ -176,7 +179,9 @@ export default function CircleDashboardPage() {
 				);
 			} else {
 				toast.error(
-					err instanceof ApiError ? err.message : raw || "Something went wrong.",
+					err instanceof ApiError
+						? err.message
+						: displayError(err, "Something went wrong."),
 					"Could not contribute",
 				);
 			}

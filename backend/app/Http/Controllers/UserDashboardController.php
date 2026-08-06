@@ -2,10 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Contribution;
 use App\Models\Group;
 use App\Models\GroupMember;
+use App\Models\Payout;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 /**
  * The user's HOME dashboard (distinct from the per-group DashboardController).
@@ -31,15 +34,20 @@ class UserDashboardController extends Controller
         // Saved balance: what the user has contributed and confirmed on-chain,
         // less what has already rotated back to them as payouts. In a thrift
         // circle this is the value they currently have "in play" across groups.
-        $contributed = (float) $user->contributions()
-            ->where('status', 'confirmed')
-            ->sum('amount');
+        //
+        // Grouped PER ASSET. A circle saves in exactly one token (XLM/USDC/USDT)
+        // chosen at creation, so a user in three circles can hold three
+        // different currencies. Summing them into one figure would add
+        // unrelated units and label the total as whichever asset we guessed —
+        // and subtracting a USDT payout from an XLM contribution can even go
+        // negative. `assets` is the truthful breakdown; `saved_balance` /
+        // `asset_code` below stay as the LARGEST single asset so older screens
+        // keep rendering something meaningful.
+        $assets = $this->savedPerAsset($user->id);
 
-        $received = (float) $user->payouts()
-            ->where('status', 'confirmed')
-            ->sum('net_amount');
-
-        $savedBalance = $contributed - $received;
+        // Headline = the asset the user has most in play. Falls back to USDC
+        // (the default circle currency) when there is nothing saved at all.
+        $headline = $assets[0] ?? ['asset_code' => 'USDC', 'saved' => '0.0000000'];
 
         // Current circles: active/open groups the user is in, newest first, with
         // just enough for a card. "View all" on the frontend pages the rest.
@@ -59,18 +67,87 @@ class UserDashboardController extends Controller
             ->whereIn('status', ['open', 'active'])
             ->count();
 
+        // Distinct people the user saves with, across ALL their circles and
+        // excluding themselves — so a solo circle reads "+0 People" honestly
+        // and someone in two overlapping circles isn't counted twice.
+        $peopleTotal = GroupMember::query()
+            ->whereIn('group_id', $memberGroupIds)
+            ->where('status', 'approved')
+            ->where('user_id', '!=', $user->id)
+            ->distinct()
+            ->count('user_id');
+
         // Quick deposit: the most pressing contribution the user owes right now,
         // so the dashboard button can jump straight to it. Null when nothing due.
         $quickDeposit = $this->nextDue($memberGroupIds, $user->id);
 
         return response()->json([
-            'saved_balance' => number_format($savedBalance, 7, '.', ''),
-            'asset_code' => 'USDC',
+            // Largest single asset — a real figure in a real currency, never a
+            // cross-currency sum. Use `assets` for the full picture.
+            'saved_balance' => $headline['saved'],
+            'asset_code' => $headline['asset_code'],
+            // Every asset the user has money in play in, largest first.
+            'assets' => $assets,
+            // Members across ALL the user's circles, not just the 5 listed
+            // below — the dashboard shows a headline count, and capping it at
+            // the page size would under-report it.
+            'people_total' => $peopleTotal,
             'circles' => $circles,
             'circles_total' => $totalCircles,
             'has_more_circles' => $totalCircles > $circles->count(),
             'quick_deposit' => $quickDeposit,
         ]);
+    }
+
+    /**
+     * Money still in play per asset: confirmed contributions less confirmed
+     * payouts, grouped by the circle's asset. Largest first, zero/negative
+     * entries dropped.
+     *
+     * Neither `contributions` nor `payouts` stores an asset — a circle saves in
+     * one token, so the asset lives on the parent group and both sides have to
+     * join through it.
+     *
+     * @return list<array{asset_code:string, saved:string}>
+     */
+    private function savedPerAsset(int $userId): array
+    {
+        // `pluck` cannot take a raw aggregate as its value column — it would be
+        // read as a literal column name — so the sum is selected under an alias
+        // and plucked by that.
+        $contributed = Contribution::query()
+            ->join('groups', 'groups.id', '=', 'contributions.group_id')
+            ->where('contributions.user_id', $userId)
+            ->where('contributions.status', 'confirmed')
+            ->groupBy('groups.asset_code')
+            ->select('groups.asset_code', DB::raw('SUM(contributions.amount) as total'))
+            ->pluck('total', 'asset_code');
+
+        $received = Payout::query()
+            ->join('groups', 'groups.id', '=', 'payouts.group_id')
+            ->where('payouts.recipient_id', $userId)
+            ->where('payouts.status', 'confirmed')
+            ->groupBy('groups.asset_code')
+            ->select('groups.asset_code', DB::raw('SUM(payouts.net_amount) as total'))
+            ->pluck('total', 'asset_code');
+
+        $codes = $contributed->keys()->merge($received->keys())->unique();
+
+        return $codes
+            ->map(fn (string $code) => [
+                'asset_code' => $code,
+                'net' => (float) ($contributed[$code] ?? 0) - (float) ($received[$code] ?? 0),
+            ])
+            // A fully-rotated circle nets to zero, and rounding can leave a
+            // negative dust figure; neither is worth a row on the dashboard.
+            ->filter(fn (array $a) => $a['net'] > 0)
+            ->sortByDesc('net')
+            ->map(fn (array $a) => [
+                'asset_code' => $a['asset_code'],
+                'saved' => number_format($a['net'], 7, '.', ''),
+            ])
+            ->values()
+            ->all();
     }
 
     /** Compact per-circle summary for a dashboard card. */

@@ -15,8 +15,10 @@
  */
 
 import { Client, PayoutOrder, LatePenalty } from "./savings/src";
+import { Client as ChallengeClient } from "./challenge/src";
 import { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
 import {
+	CHALLENGE_CONTRACT_ID,
 	NETWORK_PASSPHRASE,
 	SAVINGS_CONTRACT_ID,
 	SOROBAN_RPC_URL,
@@ -38,6 +40,26 @@ export function savingsClient(publicKey: string): Client {
 		publicKey,
 		// The kit returns { signedTxXdr, signerAddress } — the exact shape the
 		// SDK's signer contract expects.
+		signTransaction: (xdr: string) =>
+			StellarWalletsKit.signTransaction(xdr, {
+				networkPassphrase: NETWORK_PASSPHRASE,
+				address: publicKey,
+			}),
+	});
+}
+
+/**
+ * A challenge-contract client bound to the connected wallet `publicKey`.
+ *
+ * Public savings challenges live in their OWN contract, not `savings` — see
+ * CHALLENGE_CONTRACT_ID for why the two must never share a token balance.
+ */
+export function challengeClient(publicKey: string): ChallengeClient {
+	return new ChallengeClient({
+		contractId: CHALLENGE_CONTRACT_ID,
+		networkPassphrase: NETWORK_PASSPHRASE,
+		rpcUrl: SOROBAN_RPC_URL,
+		publicKey,
 		signTransaction: (xdr: string) =>
 			StellarWalletsKit.signTransaction(xdr, {
 				networkPassphrase: NETWORK_PASSPHRASE,

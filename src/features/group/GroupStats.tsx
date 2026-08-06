@@ -18,7 +18,15 @@ export default function GroupStats() {
 	const stats = [
 		{
 			title: "Total Saved",
-			value: loading ? "…" : formatMoney(data?.saved_balance, data?.asset_code),
+			// Largest single asset. A circle saves in one token, so a user across
+			// several currencies has more than this — flagged with "+N more"
+			// rather than quietly dropped, since this tile can't show a breakdown.
+			value: loading
+				? "…"
+				: formatMoney(data?.saved_balance, data?.asset_code) +
+					((data?.assets?.length ?? 0) > 1
+						? ` +${data!.assets.length - 1} more`
+						: ""),
 			color: "bg-primary",
 			hideable: true,
 		},

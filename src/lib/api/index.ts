@@ -916,9 +916,26 @@ export type QuickDeposit = {
 	contribute_endpoint: string;
 };
 
-export type DashboardData = {
-	saved_balance: string;
+/** One asset's worth of money still in play across the user's circles. */
+export type SavedAsset = {
 	asset_code: string;
+	saved: string;
+};
+
+export type DashboardData = {
+	/**
+	 * The LARGEST single asset's saved figure — a real amount in a real
+	 * currency, never a cross-currency sum. A circle saves in exactly one token,
+	 * so a user in several circles can hold several currencies; use `assets` for
+	 * the full picture and treat this only as the headline.
+	 */
+	saved_balance: string;
+	/** The asset `saved_balance` is denominated in. */
+	asset_code: string;
+	/** Every asset with money in play, largest first. Empty when nothing saved. */
+	assets: SavedAsset[];
+	/** Distinct OTHER people the user saves with, across all their circles. */
+	people_total: number;
 	circles: DashboardCircle[];
 	circles_total: number;
 	has_more_circles: boolean;

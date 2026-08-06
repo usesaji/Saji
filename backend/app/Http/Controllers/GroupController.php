@@ -209,6 +209,23 @@ class GroupController extends Controller
             ]);
         }
 
+        // An on-chain group belongs to exactly ONE circle, and the column is
+        // UNIQUE. Without this check a duplicate id reaches the database and
+        // surfaces as a raw SQLSTATE[23000] constraint violation — which tells
+        // the organizer nothing and looks like the app is broken. Two circles
+        // pointing at one on-chain group would also make contributions to one
+        // appear in the other, so this is a correctness guard, not just cosmetic.
+        $takenBy = Group::where('onchain_group_id', $data['onchain_group_id'])
+            ->where('id', '!=', $group->id)
+            ->first();
+
+        if ($takenBy !== null) {
+            return response()->json([
+                'message' => "On-chain group #{$data['onchain_group_id']} is already linked to “{$takenBy->name}”. "
+                    .'This circle needs its own on-chain group — create it again with your wallet connected.',
+            ], 422);
+        }
+
         // SECURITY: don't trust the client's claimed id. Try to verify it exists
         // on chain AND that the on-chain organizer matches this organizer's
         // wallet, so a caller can't link an id that isn't theirs.

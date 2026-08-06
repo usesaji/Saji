@@ -27,7 +27,15 @@ export default function UsefulInsights({ data }: { data: DashboardData }) {
 			tone: "text-success-700",
 			label: "Savings Growth",
 			// No historical growth metric server-side yet — show current balance.
-			value: `${Number(data.saved_balance).toLocaleString()} ${data.asset_code}`,
+			// `saved_balance` is the LARGEST single asset, so a user saving in
+			// several currencies gets a "+N more" hint rather than a figure that
+			// silently omits the rest. This tile is too small for a breakdown;
+			// the overview card owns that.
+			value:
+				`${Number(data.saved_balance).toLocaleString()} ${data.asset_code}` +
+				((data.assets?.length ?? 0) > 1
+					? ` +${data.assets.length - 1} more`
+					: ""),
 		},
 		{
 			Icon: HiOutlineUserGroup,
