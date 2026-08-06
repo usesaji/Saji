@@ -40,6 +40,30 @@ impl Setup {
         self.token_admin.mint(&addr, &balance);
         addr
     }
+
+    /// THE solvency invariant: the contract's real token balance must always
+    /// cover everything it owes — every group's `Pool` plus every member's
+    /// unclaimed `Claimable`.
+    ///
+    /// All groups share ONE token balance, so per-group bookkeeping that drifts
+    /// above reality silently spends another group's escrow. Assert this after
+    /// every money-moving operation; it is the single check that catches
+    /// over-refunding, double-crediting, and cross-group leakage.
+    fn assert_solvent(&self, groups: &[(u64, &[Address])]) {
+        let held = self.token_client.balance(&self.client.address);
+        let mut owed = 0i128;
+        for (group_id, members) in groups {
+            owed += self.client.get_pool(group_id);
+            for m in members.iter() {
+                owed += self.client.claimable_of(group_id, m);
+            }
+        }
+        assert!(
+            held >= owed,
+            "INSOLVENT: contract holds {held} but owes {owed} (short by {})",
+            owed - held,
+        );
+    }
 }
 
 /// Build an Active group of `n` members each contributing `amount`, with the
@@ -362,7 +386,21 @@ fn two_groups_pools_never_cross() {
     let amount_b = 7_000_000i128;
 
     let (group_a, org_a, members_a) = active_group(&s, 2, amount_a, 0);
-    let (group_b, _org_b, _members_b) = active_group(&s, 2, amount_b, 0);
+    let (group_b, _org_b, members_b) = active_group(&s, 2, amount_b, 0);
+
+    // Both groups' funds live in ONE contract token balance, so comparing the
+    // per-group Pool integers is not enough — assert against the real balance.
+    let check = |s: &Setup| {
+        let held = s.token_client.balance(&s.client.address);
+        let mut owed = s.client.get_pool(&group_a) + s.client.get_pool(&group_b);
+        for m in members_a.iter() {
+            owed += s.client.claimable_of(&group_a, &m);
+        }
+        for m in members_b.iter() {
+            owed += s.client.claimable_of(&group_b, &m);
+        }
+        assert!(held >= owed, "INSOLVENT: holds {held}, owes {owed}");
+    };
 
     // Only group A contributes.
     for m in members_a.iter() {
@@ -371,12 +409,19 @@ fn two_groups_pools_never_cross() {
 
     assert_eq!(s.client.get_pool(&group_a), amount_a * 2);
     assert_eq!(s.client.get_pool(&group_b), 0);
+    check(&s);
 
     // Paying out A must not touch B's (empty) pool.
     s.client.trigger_payout(&group_a);
     assert_eq!(s.client.get_pool(&group_a), 0);
     assert_eq!(s.client.get_pool(&group_b), 0);
-    let _ = (org_a, group_b);
+    check(&s);
+
+    // A's recipient claims; B's escrow must be untouched and still solvent.
+    let recipient_a = members_a.get(0).unwrap();
+    s.client.claim_payout(&group_a, &recipient_a, &recipient_a);
+    check(&s);
+    let _ = org_a;
 }
 
 // ---- Fee edges ----
@@ -523,6 +568,177 @@ fn advance_past_grace(s: &Setup) {
     s.env.ledger().set_timestamp(now + 604_800 + 1);
 }
 
+/// A member who has ALREADY been paid must not be refunded when they default.
+///
+/// Their contributions have already rotated back to them, so there is nothing
+/// left to refund — the pool now holds other members' money. Without this
+/// guard, defaulting after your payout is a way to take a second one out of
+/// everyone else's contributions.
+#[test]
+fn defaulting_after_being_paid_refunds_nothing() {
+    let s = setup();
+    let amount = 10_000_000i128;
+    // 3 members, no fee, RemoveMember policy so a default always removes.
+    let organizer = s.funded_member(amount * 10);
+    let group_id = s.client.create_group(
+        &organizer, &s.token, &amount, &604_800, &0,
+        &0u32, &0u64, &PayoutOrder::Manual, &LatePenalty::RemoveMember,
+    );
+    let m2 = s.funded_member(amount * 10);
+    let m3 = s.funded_member(amount * 10);
+    s.client.join_group(&group_id, &m2);
+    s.client.join_group(&group_id, &m3);
+    s.client.start_cycle(&group_id);
+
+    let all = [organizer.clone(), m2.clone(), m3.clone()];
+
+    // Cycle 0: everyone pays; the organizer is paid first and claims it.
+    s.client.contribute(&group_id, &organizer);
+    s.client.contribute(&group_id, &m2);
+    s.client.contribute(&group_id, &m3);
+    s.client.trigger_payout(&group_id);
+    s.client.claim_payout(&group_id, &organizer, &organizer);
+    s.assert_solvent(&[(group_id, &all)]);
+
+    // Cycle 1: only m2 and m3 pay. That pool is THEIR money.
+    s.client.contribute(&group_id, &m2);
+    s.client.contribute(&group_id, &m3);
+    let pool_before = s.client.get_pool(&group_id);
+    assert_eq!(pool_before, amount * 2);
+
+    // The organizer — already paid — now defaults.
+    let org_before = s.token_client.balance(&organizer);
+    advance_past_grace(&s);
+    s.client.resolve_default(&group_id, &organizer);
+
+    // They must receive NOTHING: their contribution already came back to them
+    // as their payout. A refund here would be taken from m2 and m3.
+    assert_eq!(
+        s.token_client.balance(&organizer),
+        org_before,
+        "an already-paid member was refunded out of other members' pool",
+    );
+    assert_eq!(
+        s.client.get_pool(&group_id),
+        pool_before,
+        "the pool was drained to refund an already-paid member",
+    );
+    s.assert_solvent(&[(group_id, &all)]);
+
+    // m2 and m3 still get the full pool they funded.
+    s.client.trigger_payout(&group_id);
+    assert_eq!(s.client.claimable_of(&group_id, &m2), amount * 2);
+    s.assert_solvent(&[(group_id, &all)]);
+}
+
+/// A refund must never be taken out of money that funds the NEXT payout.
+///
+/// The pool at any moment belongs to whoever paid into the current cycle. If a
+/// defaulter's refund is drawn from it, the next recipient is short-changed by
+/// exactly that amount.
+#[test]
+fn refund_does_not_short_change_the_next_recipient() {
+    let s = setup();
+    let amount = 10_000_000i128;
+    let organizer = s.funded_member(amount * 10);
+    let group_id = s.client.create_group(
+        &organizer, &s.token, &amount, &604_800, &0,
+        &0u32, &0u64, &PayoutOrder::Manual, &LatePenalty::RemoveMember,
+    );
+    let m2 = s.funded_member(amount * 10);
+    let m3 = s.funded_member(amount * 10);
+    let m4 = s.funded_member(amount * 10);
+    s.client.join_group(&group_id, &m2);
+    s.client.join_group(&group_id, &m3);
+    s.client.join_group(&group_id, &m4);
+    s.client.start_cycle(&group_id);
+
+    let all = [organizer.clone(), m2.clone(), m3.clone(), m4.clone()];
+
+    // Cycle 0: all four pay, organizer is paid out.
+    for m in all.iter() {
+        s.client.contribute(&group_id, m);
+    }
+    s.client.trigger_payout(&group_id);
+    s.assert_solvent(&[(group_id, &all)]);
+
+    // Cycle 1: everyone still active pays (the organizer keeps contributing even
+    // though they were already paid) — except m4, who goes silent and is removed.
+    s.client.contribute(&group_id, &organizer);
+    s.client.contribute(&group_id, &m2);
+    s.client.contribute(&group_id, &m3);
+    advance_past_grace(&s);
+    s.client.resolve_default(&group_id, &m4);
+    s.assert_solvent(&[(group_id, &all)]);
+
+    // m2 is next. Three members funded this cycle, so m2 must receive the full
+    // 3×amount — not a pool reduced by a refund to m4.
+    s.client.trigger_payout(&group_id);
+    assert_eq!(
+        s.client.claimable_of(&group_id, &m2),
+        amount * 3,
+        "next recipient was short-changed to fund a defaulter's refund",
+    );
+    s.assert_solvent(&[(group_id, &all)]);
+}
+
+/// Claiming to the contract's own address would clear the claim while the
+/// tokens never move — destroying the payout with no way to recover it.
+#[test]
+fn claim_to_the_contract_itself_is_rejected() {
+    let s = setup();
+    let amount = 10_000_000i128;
+    let (group_id, _org, members) = active_group(&s, 2, amount, 0);
+    for m in members.iter() {
+        s.client.contribute(&group_id, &m);
+    }
+    let recipient = s.client.next_recipient(&group_id);
+    s.client.trigger_payout(&group_id);
+
+    let contract_addr = s.client.address.clone();
+    let res = s.client.try_claim_payout(&group_id, &recipient, &contract_addr);
+    assert!(res.is_err(), "claiming to the contract address must be rejected");
+
+    // The payout is untouched and still claimable.
+    assert_eq!(s.client.claimable_of(&group_id, &recipient), amount * 2);
+}
+
+/// The late fee must accrue at most once per cycle. Otherwise an organizer can
+/// call `resolve_default` in a loop to run a member's debt past their entire
+/// payout and redirect it to themselves — bypassing the MAX_FEE_BPS cap.
+#[test]
+fn late_fee_accrues_only_once_per_cycle() {
+    let s = setup();
+    let amount = 10_000_000i128;
+    let late_bps = 1_000u32; // 10%
+    let organizer = s.funded_member(amount * 10);
+    let group_id = s.client.create_group(
+        &organizer, &s.token, &amount, &604_800, &0,
+        &late_bps, &0u64, &PayoutOrder::Manual, &LatePenalty::DeductFromBalance,
+    );
+    let m2 = s.funded_member(amount * 10);
+    s.client.join_group(&group_id, &m2);
+    s.client.start_cycle(&group_id);
+
+    // organizer pays; m2 does not and goes past grace.
+    s.client.contribute(&group_id, &organizer);
+    advance_past_grace(&s);
+
+    let expected = amount * late_bps as i128 / 10_000;
+    s.client.resolve_default(&group_id, &m2);
+    assert_eq!(s.client.late_fee_of(&group_id, &m2), expected);
+
+    // Hammering it must not stack more debt for the same cycle.
+    for _ in 0..10 {
+        let _ = s.client.try_resolve_default(&group_id, &m2);
+    }
+    assert_eq!(
+        s.client.late_fee_of(&group_id, &m2),
+        expected,
+        "late fee re-accrued within one cycle — organizer can confiscate the payout",
+    );
+}
+
 #[test]
 fn resolve_default_removes_empty_wallet_member_and_refunds_the_rest() {
     let s = setup();
@@ -570,7 +786,7 @@ fn resolve_default_removes_empty_wallet_member_and_refunds_the_rest() {
 }
 
 #[test]
-fn resolve_default_refunds_a_removed_member_their_past_contributions() {
+fn resolve_default_does_not_refund_already_rotated_contributions() {
     let s = setup();
     let amount = 10_000_000i128;
     // Policy RemoveMember so a member who CAN pay is still removed on default.
@@ -591,8 +807,9 @@ fn resolve_default_refunds_a_removed_member_their_past_contributions() {
     s.client.contribute(&group_id, &m3);
     s.client.trigger_payout(&group_id); // organizer paid, cycle → 1
 
-    // Cycle 1: the active members organizer + m2 pay; m3 defaults. m3 already
-    // paid `amount` in cycle 0 (which is still sitting in the pool).
+    // Cycle 1: the active members organizer + m2 pay; m3 defaults. m3's cycle-0
+    // contribution was ROTATED OUT to the organizer above, so it is no longer in
+    // the pool — the pool now holds only the organizer's and m2's cycle-1 money.
     s.client.contribute(&group_id, &organizer);
     s.client.contribute(&group_id, &m2);
     let m3_before = s.token_client.balance(&m3);
@@ -601,15 +818,20 @@ fn resolve_default_refunds_a_removed_member_their_past_contributions() {
     advance_past_grace(&s);
     s.client.resolve_default(&group_id, &m3);
 
-    // m3 removed and refunded exactly what they had put in (amount, from cycle 0).
+    // m3 is removed with NO refund: they have nothing unrotated left. Refunding
+    // their spent cycle-0 contribution would pay them out of the organizer's and
+    // m2's current-cycle money.
     assert!(s.client.is_removed(&group_id, &m3));
-    assert_eq!(s.token_client.balance(&m3), m3_before + amount);
-    assert_eq!(s.client.get_pool(&group_id), pool_before - amount);
+    assert_eq!(s.token_client.balance(&m3), m3_before);
+    assert_eq!(s.client.get_pool(&group_id), pool_before);
 
     // organizer already received in cycle 0, so the two remaining payout slots
     // resolve to m2. With m3 out, the circle completes on the next payout.
     s.client.trigger_payout(&group_id); // pays m2 (claimable)
     assert_eq!(s.client.get_group(&group_id).status, Status::Completed);
+
+    // m2 receives the full cycle-1 pool, undiminished by m3's removal.
+    assert_eq!(s.client.claimable_of(&group_id, &m2), amount * 2);
 
     // Both cycle payouts are held claimable; once claimed, contract balance is 0.
     s.client.claim_payout(&group_id, &organizer, &organizer);

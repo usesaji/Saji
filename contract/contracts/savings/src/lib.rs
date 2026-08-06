@@ -8,8 +8,8 @@
 //! `SPEC.md` for the full design and invariants.
 
 use soroban_sdk::{
-    contract, contractimpl, contracterror, contracttype, symbol_short,
-    token, Address, Env, Vec,
+    contract, contractimpl, contracterror, contracttype, panic_with_error,
+    symbol_short, token, Address, Env, Vec,
 };
 
 // ----------------------------------------------------------------------------
@@ -100,11 +100,26 @@ pub enum DataKey {
     /// rotation? Defaulted members are skipped for contributions and payouts.
     Defaulted(u64, Address),
     /// (group_id, member) -> total token amount this member has paid into the
-    /// pool across all cycles, so a removal can refund exactly what they put in.
+    /// pool across all cycles. Lifetime figure, for audit/UI only — it is NOT a
+    /// refundable balance (see `Unrotated`).
     PaidTotal(u64, Address),
+    /// (group_id, member) -> the part of this member's contributions that has
+    /// NOT yet been rotated out to a recipient, i.e. the only money still
+    /// sitting in the pool on their behalf.
+    ///
+    /// This is what a removal may refund. `PaidTotal` cannot be: once a cycle
+    /// pays out, that pool went to someone else, so refunding against a lifetime
+    /// total hands the defaulter money belonging to the members who funded the
+    /// CURRENT cycle. Cleared for everyone on each payout, since a payout
+    /// consumes the whole pool.
+    Unrotated(u64, Address),
     /// (group_id, member) -> accrued late-fee debt (token stroops) deducted from
     /// this member's eventual payout and forwarded to the organizer.
     LateFees(u64, Address),
+    /// (group_id, cycle, member) -> has a late fee already been charged to this
+    /// member for this cycle? Caps accrual at once per cycle so the fee cannot be
+    /// stacked by calling `resolve_default` repeatedly.
+    LateFeeCharged(u64, u32, Address),
     /// (group_id) -> ledger timestamp when the current cycle became due for
     /// payout tracking. Set on start_cycle and each payout; resolve_default uses
     /// it with grace_period to decide whether a member is late.
@@ -149,6 +164,14 @@ pub enum Error {
     TooManyMembers = 15,
     /// claim_payout was called by a member who has nothing owed to claim.
     NothingToClaim = 16,
+    /// A transfer would exceed what the contract actually holds. Every group's
+    /// funds share one token balance, so this catches per-group bookkeeping
+    /// drifting above reality before it can spend another circle's escrow.
+    InsufficientEscrow = 17,
+    /// claim_payout was given the contract's own address as the destination.
+    /// That would clear the claim while the tokens never move, destroying the
+    /// payout with no way to recover it.
+    InvalidDestination = 18,
 }
 
 const BPS_DENOMINATOR: i128 = 10_000;
@@ -473,6 +496,30 @@ impl SavingsContract {
             return Err(Error::AlreadyContributed);
         }
 
+        // Effects BEFORE the external call (checks-effects-interactions): the
+        // token is an arbitrary contract address, so its `transfer` is untrusted
+        // code. Writing state first means a reentrant call sees this cycle as
+        // already paid and is rejected by the guard above.
+        storage.set(&paid_key, &true);
+        let pool: i128 = storage.get(&DataKey::Pool(group_id)).unwrap_or(0);
+        storage.set(&DataKey::Pool(group_id), &(pool + config.amount));
+        // Track lifetime contributions (audit/UI) and the portion not yet
+        // rotated out, which is the only part a refund may draw on.
+        let paid_total: i128 = storage
+            .get(&DataKey::PaidTotal(group_id, member.clone()))
+            .unwrap_or(0);
+        storage.set(
+            &DataKey::PaidTotal(group_id, member.clone()),
+            &(paid_total + config.amount),
+        );
+        let unrotated: i128 = storage
+            .get(&DataKey::Unrotated(group_id, member.clone()))
+            .unwrap_or(0);
+        storage.set(
+            &DataKey::Unrotated(group_id, member.clone()),
+            &(unrotated + config.amount),
+        );
+
         // Pull funds from the member into the contract (escrow).
         let token_client = token::Client::new(&env, &config.token);
         token_client.transfer(
@@ -481,24 +528,13 @@ impl SavingsContract {
             &config.amount,
         );
 
-        storage.set(&paid_key, &true);
-        let pool: i128 = storage.get(&DataKey::Pool(group_id)).unwrap_or(0);
-        storage.set(&DataKey::Pool(group_id), &(pool + config.amount));
-        // Track lifetime contributions for exact refunds on later removal.
-        let paid_total: i128 = storage
-            .get(&DataKey::PaidTotal(group_id, member.clone()))
-            .unwrap_or(0);
-        storage.set(
-            &DataKey::PaidTotal(group_id, member.clone()),
-            &(paid_total + config.amount),
-        );
-
         env.events().publish(
-            (symbol_short!("contrib"), group_id, member),
+            (symbol_short!("contrib"), group_id, member.clone()),
             (cycle, config.amount),
         );
 
         Self::bump_ttl(&env, group_id);
+        Self::bump_member_ttl(&env, group_id, &member);
         Ok(())
     }
 
@@ -578,11 +614,6 @@ impl SavingsContract {
 
         let token_client = token::Client::new(&env, &config.token);
         let contract_addr = env.current_contract_address();
-        // Only the fee leaves now (the organizer's service charge). The
-        // recipient's net stays escrowed and becomes claimable.
-        if fee > 0 {
-            token_client.transfer(&contract_addr, &config.organizer, &fee);
-        }
 
         // Record the recipient's net as claimable (add to any existing balance so
         // an unclaimed earlier payout is never lost). Draw it out of the pool.
@@ -591,12 +622,26 @@ impl SavingsContract {
             .unwrap_or(0);
         storage.set(&DataKey::Claimable(group_id, recipient.clone()), &(prev_claim + net));
 
-        // Pool now holds only the escrowed claimable(s); the fee has left and the
-        // net is earmarked. Mark the recipient as having received (their turn is
-        // done in the rotation) and clear their settled late-fee debt.
+        // This payout consumes the whole pool, so nobody has unrotated money in
+        // it any more. Clearing this is what stops a later removal from
+        // refunding contributions that have already gone to a recipient.
+        for m in members.iter() {
+            storage.remove(&DataKey::Unrotated(group_id, m));
+        }
+
+        // Pool now holds only the escrowed claimable(s); the net is earmarked.
+        // Mark the recipient as having received (their turn is done in the
+        // rotation) and clear their settled late-fee debt.
         storage.set(&DataKey::Pool(group_id), &0i128);
         storage.set(&DataKey::Received(group_id, recipient.clone()), &true);
         storage.remove(&DataKey::LateFees(group_id, recipient.clone()));
+
+        // Interaction last: only the organizer's fee actually leaves now. The
+        // recipient's net stays escrowed until they claim it.
+        if fee > 0 {
+            Self::assert_covers(&env, &token_client, fee);
+            token_client.transfer(&contract_addr, &config.organizer, &fee);
+        }
 
         env.events().publish(
             (symbol_short!("payout"), group_id),
@@ -617,6 +662,12 @@ impl SavingsContract {
         }
 
         Self::bump_ttl(&env, group_id);
+        // Keep every member's money keys alive — an archived `Claimable` would
+        // strand the payout, and an archived `Received` would let the same
+        // member be paid a second time.
+        for m in members.iter() {
+            Self::bump_member_ttl(&env, group_id, &m);
+        }
         Ok(())
     }
 
@@ -632,6 +683,9 @@ impl SavingsContract {
     /// The claimable entry stays keyed on `member` (not `to`), so a claim to a
     /// third party still clears the right balance and can't be replayed.
     ///
+    /// The one destination that is rejected is the contract itself: that would
+    /// clear the claim while the tokens never moved, destroying the payout.
+    ///
     /// Note: if `to` holds no trustline for the group's token the transfer
     /// panics and the whole claim reverts — the payout stays escrowed and
     /// claimable, so nothing is lost. Callers should check first.
@@ -645,6 +699,10 @@ impl SavingsContract {
     ) -> Result<i128, Error> {
         member.require_auth();
 
+        if to == env.current_contract_address() {
+            return Err(Error::InvalidDestination);
+        }
+
         let config = Self::load_config(&env, group_id)?;
         let storage = env.storage().persistent();
 
@@ -655,12 +713,13 @@ impl SavingsContract {
             return Err(Error::NothingToClaim);
         }
 
-        // Transfer the escrowed net from the contract to the chosen destination.
-        let token_client = token::Client::new(&env, &config.token);
-        token_client.transfer(&env.current_contract_address(), &to, &amount);
-
-        // Clear the claim so it can't be double-withdrawn.
+        // Effects before interaction: clear the claim FIRST so a reentrant call
+        // through an untrusted token contract finds nothing left to claim.
         storage.remove(&DataKey::Claimable(group_id, member.clone()));
+
+        let token_client = token::Client::new(&env, &config.token);
+        Self::assert_covers(&env, &token_client, amount);
+        token_client.transfer(&env.current_contract_address(), &to, &amount);
 
         // `to` is published so the indexer can see where the funds actually went.
         env.events().publish(
@@ -735,7 +794,17 @@ impl SavingsContract {
         if cannot_cover || config.late_penalty == LatePenalty::RemoveMember {
             Self::remove_member(&env, group_id, &member, &config, &token_client);
         } else {
-            // Accrue a late fee (bps of the contribution amount) as debt.
+            // Accrue a late fee (bps of the contribution amount) as debt — at
+            // most ONCE per cycle. Without this key, every gate above stays true
+            // after accrual, so an organizer could call this in a loop to run the
+            // debt past the member's whole payout and redirect it to themselves,
+            // bypassing the MAX_FEE_BPS cap entirely.
+            let charged_key = DataKey::LateFeeCharged(group_id, cycle, member.clone());
+            if storage.get::<DataKey, bool>(&charged_key).unwrap_or(false) {
+                return Err(Error::NotDefaultable);
+            }
+            storage.set(&charged_key, &true);
+
             let late = config.amount * config.late_fee_bps as i128 / BPS_DENOMINATOR;
             let prev: i128 = storage
                 .get(&DataKey::LateFees(group_id, member.clone()))
@@ -845,11 +914,15 @@ impl SavingsContract {
             .unwrap_or(false)
     }
 
-    /// Mark a member defaulted and refund everything they had paid into the
-    /// pool. Idempotent-safe callers only (guarded by is_defaulted upstream).
-    /// The refund is capped at the current pool so a payout can never be clawed
-    /// back below zero — a member who has already been paid out (Received) has a
-    /// spent contribution and simply forfeits the refund of that portion.
+    /// Mark a member defaulted and refund only what they still have sitting in
+    /// the pool. Idempotent-safe callers only (guarded by is_defaulted upstream).
+    ///
+    /// The refund is their `Unrotated` balance — contributions from cycles that
+    /// have NOT yet paid out. It deliberately is NOT `PaidTotal`: once a cycle
+    /// pays out, that money went to a recipient, and the pool now holds the
+    /// CURRENT cycle's contributions from other members. Refunding a lifetime
+    /// total would hand the defaulter those other members' money, and a member
+    /// who already collected their own payout would be paid twice.
     fn remove_member(
         env: &Env,
         group_id: u64,
@@ -861,23 +934,31 @@ impl SavingsContract {
 
         storage.set(&DataKey::Defaulted(group_id, member.clone()), &true);
 
-        // Refund exactly what they paid in, bounded by what the pool still holds.
-        let paid_in: i128 = storage
-            .get(&DataKey::PaidTotal(group_id, member.clone()))
+        // Only this member's own unrotated contributions are refundable, and
+        // never more than the pool actually holds.
+        let unrotated: i128 = storage
+            .get(&DataKey::Unrotated(group_id, member.clone()))
             .unwrap_or(0);
         let pool: i128 = storage.get(&DataKey::Pool(group_id)).unwrap_or(0);
-        let refund = if paid_in > pool { pool } else { paid_in };
+        let refund = if unrotated > pool { pool } else { unrotated };
+
+        // Effects before the external call (checks-effects-interactions).
         if refund > 0 {
+            storage.set(&DataKey::Pool(group_id), &(pool - refund));
+        }
+        // They keep no debt and no future claim.
+        storage.remove(&DataKey::PaidTotal(group_id, member.clone()));
+        storage.remove(&DataKey::Unrotated(group_id, member.clone()));
+        storage.remove(&DataKey::LateFees(group_id, member.clone()));
+
+        if refund > 0 {
+            Self::assert_covers(env, token_client, refund);
             token_client.transfer(
                 &env.current_contract_address(),
                 member,
                 &refund,
             );
-            storage.set(&DataKey::Pool(group_id), &(pool - refund));
         }
-        // They keep no debt and no future claim.
-        storage.remove(&DataKey::PaidTotal(group_id, member.clone()));
-        storage.remove(&DataKey::LateFees(group_id, member.clone()));
 
         // A removed member cannot be the awaited recipient, so mark them
         // Received too — keeps remaining_recipients() and the payout scan honest.
@@ -905,10 +986,25 @@ impl SavingsContract {
         n
     }
 
-    /// Keep a group's core keys alive. Called on every state change so an
-    /// actively-used circle is never archived out from under its funds. The
-    /// per-(cycle, member) `Contributed` keys are short-lived by nature and are
-    /// left to their default TTL.
+    /// Guard every outbound transfer against the contract's REAL balance.
+    ///
+    /// All groups share one token balance, so per-group bookkeeping that drifts
+    /// above reality would silently spend another group's escrow and strand it
+    /// with no recovery path. This turns that into an immediate, loud failure
+    /// instead of a slow leak across circles.
+    fn assert_covers(env: &Env, token_client: &token::Client, amount: i128) {
+        let held = token_client.balance(&env.current_contract_address());
+        if held < amount {
+            panic_with_error!(env, Error::InsufficientEscrow);
+        }
+    }
+
+    /// Keep a group's keys alive. Called on every state change so an
+    /// actively-used circle is never archived out from under its funds.
+    ///
+    /// Per-member money keys are bumped separately by `bump_member_ttl`, since
+    /// they need the member's address. The per-(cycle, member) `Contributed`
+    /// keys are short-lived by nature and are left to their default TTL.
     fn bump_ttl(env: &Env, group_id: u64) {
         let storage = env.storage().persistent();
         for key in [
@@ -917,6 +1013,28 @@ impl SavingsContract {
             DataKey::Pool(group_id),
             DataKey::Cycle(group_id),
             DataKey::CycleStart(group_id),
+        ] {
+            if storage.has(&key) {
+                storage.extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+            }
+        }
+    }
+
+    /// Keep a member's money-bearing keys alive.
+    ///
+    /// `Claimable` holds real funds: if it is archived, `claim_payout` reads 0
+    /// and the payout is stranded in the contract forever. `Received` is just as
+    /// important for integrity — an archived entry reads `false`, which would
+    /// let the same member be selected for a SECOND payout.
+    fn bump_member_ttl(env: &Env, group_id: u64, member: &Address) {
+        let storage = env.storage().persistent();
+        for key in [
+            DataKey::Claimable(group_id, member.clone()),
+            DataKey::Received(group_id, member.clone()),
+            DataKey::Defaulted(group_id, member.clone()),
+            DataKey::PaidTotal(group_id, member.clone()),
+            DataKey::Unrotated(group_id, member.clone()),
+            DataKey::LateFees(group_id, member.clone()),
         ] {
             if storage.has(&key) {
                 storage.extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
