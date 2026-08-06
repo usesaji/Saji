@@ -27,20 +27,51 @@ export type PrismaTransaction = Omit<
 
 /**
  * Prisma 7 takes the connection through a driver adapter rather than a `url`
- * in the schema. `connectionString` must point at a POOLED endpoint in
- * production — each serverless instance opens its own pool, so a direct
- * Postgres connection runs out of slots under load.
+ * in the schema.
+ *
+ * `DATABASE_URL` must point at a POOLED, TRANSACTION-mode endpoint in
+ * production (e.g. Supabase's `:6543?pgbouncer=true`) — each serverless
+ * instance opens its own pool, so a direct connection runs out of slots under
+ * load.
+ *
+ * BUT: `prisma.$transaction(async (tx) => …)` opens an interactive,
+ * multi-statement transaction, and a transaction-mode pooler recycles the
+ * underlying connection between statements — it cannot hold one open across a
+ * round trip. Every interactive transaction on that pooler fails with
+ * "Unable to start a transaction in the given time" (P2028). This bit us in
+ * dev: `/auth/register/verify-otp` 500s the moment it calls `$transaction`,
+ * confirmed against a real Supabase pooler connection, not simulated.
+ *
+ * The fix is `DIRECT_URL` (session-mode, e.g. Supabase's `:5432`) for
+ * anything that opens an interactive transaction, while plain queries still
+ * use the pooled connection sparingly. Since every route in this codebase that
+ * touches money uses `$transaction` for a real correctness reason — atomic OTP
+ * consumption, exactly-one-primary-destination swaps, position renumbering —
+ * simplest correct fix is: use the DIRECT connection everywhere. It does mean
+ * this app needs a session-capable Postgres connection at runtime, not only at
+ * migrate time; that's a real constraint to carry into the hosting choice, not
+ * a temporary workaround.
  */
 function createClient(): PrismaClient {
-	const connectionString = process.env.DATABASE_URL;
+	const connectionString = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
 
 	if (!connectionString) {
-		throw new Error("DATABASE_URL is not set.");
+		throw new Error("DATABASE_URL (or DIRECT_URL) is not set.");
 	}
 
 	return new PrismaClient({
 		adapter: new PrismaPg({ connectionString }),
 		log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
+		transactionOptions: {
+			// Prisma's default is 5s. Verified against a live Supabase free-tier
+			// session pooler: an interactive $transaction occasionally waits
+			// longer than 5s for a connection handoff and fails with P2028
+			// ("Unable to start a transaction in the given time") even though
+			// the query itself is fine — a retry immediately succeeds. 15s
+			// absorbs that without masking a genuinely stuck transaction.
+			maxWait: 15_000,
+			timeout: 15_000,
+		},
 	});
 }
 

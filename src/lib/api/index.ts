@@ -1,16 +1,27 @@
 /**
- * Thin client for the Saji Laravel backend.
+ * Thin client for the Saji API — now the Next.js route handlers in
+ * `src/app/api`, previously a separate Laravel server.
  *
- * Uses token (Sanctum) auth: on register/login the backend returns a bearer
- * token which we persist in localStorage and attach to subsequent requests.
- * This file is the single place the frontend talks to the backend.
+ * Uses bearer-token auth: on register/login the API returns a token which we
+ * persist in localStorage and attach to subsequent requests. The scheme is
+ * unchanged from Sanctum, so this file did not need rewriting — see
+ * `src/server/auth.ts`. This is the single place the frontend talks to the API.
  *
- * Organized by domain, mirroring backend/routes/api.php:
+ * Organized by domain:
  *   auth · profile · wallet · withdrawInfo · fiatDeposit · groups ·
  *   contributions · challenges · transactions · activity · dashboard
  */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+// Empty string = same-origin, the default now that the API lives in this app as
+// route handlers under `src/app/api`. Set this only when the API is deployed
+// separately.
+//
+// The fallback is deliberately "" and not a localhost URL: an unset var on a
+// fresh clone or a deploy where it was never configured would otherwise point
+// the browser at a dead host, and every call fails at the fetch layer as
+// "Could not reach the server" — which looks like an outage, not a missing
+// environment variable.
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 const TOKEN_KEY = "saji_token";
 
 // ---- shared types ----
