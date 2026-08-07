@@ -140,7 +140,18 @@ export async function GET(
 				has_received_payout: member.hasReceivedPayout,
 				removed: member.status === "removed",
 			})),
-			cycle_activity: cycleActivity,
+			// Hand-mapped rather than serializeTransaction: this is a partial
+			// `select`, not a full Transaction row, so the full serializer's
+			// field set wouldn't line up. Same snake_case requirement applies —
+			// the frontend reads `a.created_at`/`a.explorer_url` on this list.
+			cycle_activity: cycleActivity.map((tx) => ({
+				id: tx.id,
+				type: tx.type,
+				status: tx.status,
+				stellar_tx_hash: tx.stellarTxHash,
+				explorer_url: tx.explorerUrl,
+				created_at: tx.createdAt,
+			})),
 		});
 	});
 }

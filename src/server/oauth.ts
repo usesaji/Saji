@@ -14,7 +14,8 @@
  * wallet at deposit time and the backend never generates or holds one.
  */
 
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { prisma } from "./db";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -22,6 +23,35 @@ const GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
 
 /** How long a signed `state` stays valid. Long enough to read a consent screen. */
 const STATE_TTL_MS = 10 * 60_000;
+
+/** Cookie holding the signed `state`, compared against Google's echo. */
+export const STATE_COOKIE = "saji_oauth_state";
+
+/**
+ * `Set-Cookie` value for the state cookie.
+ *
+ * HttpOnly because no script needs to read it. SameSite=Lax is required and
+ * must not be tightened to Strict: Strict withholds the cookie on the
+ * cross-site return from Google, which would fail every sign-in.
+ */
+export function stateCookie(state: string, maxAge = 600): string {
+	const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+
+	return `${STATE_COOKIE}=${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+}
+
+/** Read the state cookie off the request. */
+export function readStateCookie(request: Request): string | null {
+	const header = request.headers.get("cookie");
+	if (!header) return null;
+
+	for (const part of header.split(";")) {
+		const [name, ...rest] = part.trim().split("=");
+		if (name === STATE_COOKIE) return rest.join("=");
+	}
+
+	return null;
+}
 
 export type GoogleProfile = {
 	id: string;
@@ -55,8 +85,7 @@ export function frontendUrl(request: Request, path: string): string {
  * it removes the chance of the two drifting apart.
  */
 export function callbackUrl(request: Request): string {
-	return new URL("/api/auth/google/callback", request.url).origin +
-		"/api/auth/google/callback";
+	return new URL("/api/auth/google/callback", request.url).toString();
 }
 
 function stateSecret(): string {
@@ -84,19 +113,33 @@ export function createState(): string {
 	return `${payload}.${sign(payload)}`;
 }
 
-/** Constant-time verification of a `state` produced by `createState`. */
-export function verifyState(state: string | null): boolean {
-	if (!state) return false;
+/** Constant-time string compare that tolerates differing lengths. */
+function safeEqual(a: string, b: string): boolean {
+	// timingSafeEqual throws unless the buffers are the same length.
+	if (a.length !== b.length) return false;
+
+	return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+/**
+ * Verify the `state` Google echoed back.
+ *
+ * Two checks, and both matter. The signature proves we issued the value; the
+ * cookie comparison proves it was issued to THIS browser. Checking only the
+ * signature would still let an attacker paste their own valid state into a
+ * victim's browser and link the victim's session to the attacker's Google
+ * account — which is the login-CSRF that Socialite's `stateless()` allowed.
+ */
+export function verifyState(state: string | null, cookie: string | null): boolean {
+	if (!state || !cookie) return false;
+	if (!safeEqual(state, cookie)) return false;
 
 	const parts = state.split(".");
 	if (parts.length !== 3) return false;
 
 	const [nonce, expiry, mac] = parts;
-	const expected = sign(`${nonce}.${expiry}`);
 
-	// Length check first: timingSafeEqual throws on a length mismatch.
-	if (mac.length !== expected.length) return false;
-	if (!timingSafeEqual(Buffer.from(mac), Buffer.from(expected))) return false;
+	if (!safeEqual(mac, sign(`${nonce}.${expiry}`))) return false;
 
 	return Number(expiry) > Date.now();
 }
@@ -179,4 +222,62 @@ export async function exchangeCode(
 		email: profile.email_verified ? (profile.email ?? null) : null,
 		name: profile.name ?? null,
 	};
+}
+
+// ---------------------------------------------------------------------------
+// Handoff code — trades a URL-safe redirect for a real bearer token
+//
+// The callback is a full-page redirect, so it cannot return the bearer token
+// as JSON — but putting the real 30-day token directly on the URL leaves it
+// in browser history and exposed to anything that reads `window.location` or
+// fires a request before the landing page can clear it. Instead the callback
+// mints a single-use, 30-second CODE and puts that on the URL; the frontend
+// immediately exchanges it for the real token via a POST body (never a URL),
+// mirroring the signup-token pattern used elsewhere in the OTP flow. A code
+// that is never redeemed is worthless after it expires.
+//
+// Stored in the DB (OauthHandoff), not an in-memory Map: the callback and the
+// exchange are two separate requests with no guarantee of landing on the same
+// serverless instance.
+// ---------------------------------------------------------------------------
+
+const HANDOFF_TTL_MS = 30_000;
+
+/** Mint a one-time code that redeems for `token` exactly once, within 30s. */
+export async function createHandoffCode(token: string): Promise<string> {
+	const code = randomBytes(32).toString("hex");
+
+	await prisma.oauthHandoff.create({
+		data: {
+			codeHash: hashHandoffCode(code),
+			token,
+			expiresAt: new Date(Date.now() + HANDOFF_TTL_MS),
+		},
+	});
+
+	return code;
+}
+
+function hashHandoffCode(code: string): string {
+	return createHash("sha256").update(code).digest("hex");
+}
+
+/**
+ * Redeem a handoff code for the bearer token it was minted for, or null if
+ * the code is unknown, already used, or expired. Single-use: the row is
+ * deleted whether or not it was valid, so a code can never be replayed.
+ */
+export async function redeemHandoffCode(code: string): Promise<string | null> {
+	const codeHash = hashHandoffCode(code);
+
+	// Delete-and-return in one round trip: two concurrent redemption attempts
+	// (e.g. a double-fired effect on the landing page) can only have one of
+	// them find the row, so the code is inherently single-use even under a
+	// race, not just "single-use in the common case."
+	const deleted = await prisma.oauthHandoff
+		.delete({ where: { codeHash } })
+		.catch(() => null);
+
+	if (!deleted || deleted.expiresAt < new Date()) return null;
+	return deleted.token;
 }

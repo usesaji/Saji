@@ -3,15 +3,18 @@
 import { FcGoogle } from "react-icons/fc";
 import { Button } from "../../../components/ui/button";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+import { auth } from "../../../lib/api";
 
 export default function GoogleAuthBtn() {
-	// Server-side OAuth flow: hand the whole browser to the backend, which
-	// redirects on to Google and, after consent, back to /auth/google/callback
-	// with a token. A plain navigation (not fetch) is required so the browser
-	// follows Google's redirects.
+	// Server-side OAuth flow: hand the whole browser to the API, which redirects
+	// on to Google and, after consent, back to /auth/google/callback with a
+	// token. A plain navigation (not fetch) is required so the browser follows
+	// Google's redirects.
+	//
+	// The URL comes from the api client rather than a second copy of the base
+	// URL here — a local copy silently drifts from the real one.
 	const onClick = () => {
-		window.location.href = `${API_URL}/api/auth/google/redirect`;
+		window.location.href = auth.googleRedirectUrl();
 	};
 
 	return (

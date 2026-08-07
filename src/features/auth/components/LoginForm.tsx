@@ -23,9 +23,15 @@ import { ApiError, auth, fieldErrors, setToken } from "../../../lib/api";
 
 type SignInValues = z.infer<typeof SignInSchema>;
 
+/**
+ * Flags set by `src/app/api/auth/google/*`. An unmapped code shows no toast at
+ * all, so every `?error=` the callback can emit needs an entry here.
+ */
 const GOOGLE_ERRORS: Record<string, string> = {
 	google: "Google sign-in was cancelled or failed. Please try again.",
-	google_no_email: "Google didn't share an email for that account.",
+	google_no_email: "Google didn't share a verified email for that account.",
+	google_state: "That sign-in link expired. Please try again.",
+	google_not_configured: "Google sign-in isn't set up on this server yet.",
 };
 
 export default function LoginForm() {

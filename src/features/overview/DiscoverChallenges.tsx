@@ -3,6 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 import { useCallback, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { IoIosArrowRoundForward } from "react-icons/io";
 import { HiOutlineUserPlus } from "react-icons/hi2";
 import { Button } from "../../components/ui/button";
@@ -70,14 +71,16 @@ function ChallengeCard({
 	challenge: Group;
 	onJoined: () => void;
 }) {
+	const router = useRouter();
 	const [joining, setJoining] = useState(false);
 
 	const join = async () => {
 		setJoining(true);
 		try {
 			await challengesApi.join(challenge.id);
-			toast.success(`You joined “${challenge.name}”.`, "Joined group");
+			toast.success(`You joined "${challenge.name}".`, "Joined group");
 			onJoined();
+			router.push(pageRoutes.dashboardRoutes.CHALLENGE(challenge.id));
 		} catch (err) {
 			toast.error(
 				err instanceof ApiError ? err.message : "Could not join.",

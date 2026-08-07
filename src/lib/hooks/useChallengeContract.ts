@@ -32,13 +32,18 @@ export function useChallengeContract() {
 	 * `token` is the asset's Stellar Asset Contract address. A challenge is
 	 * locked to the token of its FIRST deposit, so passing a different one
 	 * reverts with WrongToken (#3) rather than silently mixing assets.
+	 *
+	 * Returns the submitted transaction hash — the backend's deposit-recording
+	 * endpoint needs it to attach an explorer link and log the action, even
+	 * though the amount itself is verified against the contract's own
+	 * `balance_of`, not against this hash.
 	 */
 	const deposit = useCallback(
 		async (
 			challengeId: bigint | number,
 			token: string,
 			amount: bigint,
-		): Promise<void> => {
+		): Promise<string> => {
 			const member = await requireAddress();
 			const client = challengeClient(member);
 
@@ -51,6 +56,10 @@ export function useChallengeContract() {
 			const sent = await tx.signAndSend();
 			const result = sent.result;
 			if (result && "unwrap" in result) result.unwrap(); // throws on Err
+
+			const hash = sent.sendTransactionResponse?.hash;
+			if (!hash) throw new Error("The network did not return a transaction hash.");
+			return hash;
 		},
 		[requireAddress],
 	);

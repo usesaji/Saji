@@ -8,6 +8,7 @@ import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json, notFound } from "@/server/http";
 import { findGroupOr404 } from "@/server/groups";
+import { serializeMember } from "@/server/serializers";
 
 export async function POST(
 	request: Request,
@@ -26,7 +27,7 @@ export async function POST(
 
 		// Idempotent: joining twice returns the existing membership rather than
 		// resetting its state.
-		if (existing) return json(existing, 200);
+		if (existing) return json(serializeMember(existing), 200);
 
 		const member = await prisma.groupMember.create({
 			data: {
@@ -37,6 +38,6 @@ export async function POST(
 			},
 		});
 
-		return json(member, 201);
+		return json(serializeMember(member), 201);
 	});
 }

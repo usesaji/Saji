@@ -20,6 +20,7 @@ import { handle, json } from "@/server/http";
 import { assertApprovedMember, findGroupOr404 } from "@/server/groups";
 import { runIndexer } from "@/server/stellar/indexer";
 import { reconcileAfterResponse } from "@/server/stellar/reconcile";
+import { serializeContribution } from "@/server/serializers";
 
 export async function POST(
 	request: Request,
@@ -39,7 +40,12 @@ export async function POST(
 			// If the RPC is unreachable, fall back to `after()` — the response
 			// goes out immediately either way, and the cron is the final net.
 			try {
-				await runIndexer(group.id);
+				// waitForPayouts=false: this call's job is confirming the caller's
+				// OWN contribution quickly, not settling a payout inline — that
+				// would add up to ~9s of on-ledger confirmation polling to every
+				// contribute click. The cron sweep and reconcileAfterResponse below
+				// still cover a completed cycle shortly after.
+				await runIndexer(group.id, false);
 			} catch (error) {
 				console.warn("[contributions] inline reconcile failed:", error);
 				reconcileAfterResponse(group.id);
@@ -60,6 +66,6 @@ export async function POST(
 			},
 		});
 
-		return json(contribution);
+		return json(contribution ? serializeContribution(contribution) : null);
 	});
 }

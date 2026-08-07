@@ -4,11 +4,12 @@
  * Ported from `WithdrawInfoController::update` and `::destroy`.
  */
 
-import { prisma, type PrismaTransaction } from "@/server/db";
+import { prisma, withTransaction } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json, parseBody } from "@/server/http";
 import { findDestinationOr404 } from "@/server/withdraw-info";
 import { destinationSchema } from "../route";
+import { serializeWithdrawInfo } from "@/server/serializers";
 
 /** Update one of the user's destinations. */
 export async function PATCH(
@@ -22,29 +23,27 @@ export async function PATCH(
 		const existing = await findDestinationOr404(id, user.id);
 		const data = await parseBody(request, destinationSchema);
 
-		const updated = await prisma.$transaction(
-			async (tx: PrismaTransaction) => {
-				if (data.is_primary && !existing.isPrimary) {
-					await tx.withdrawInfo.updateMany({
-						where: { userId: user.id },
-						data: { isPrimary: false },
-					});
-				}
-
-				return tx.withdrawInfo.update({
-					where: { id: existing.id },
-					data: {
-						stellarAddress: data.stellar_address,
-						memo: data.memo ?? null,
-						memoType: data.memo_type ?? "none",
-						destinationLabel: data.destination_label ?? null,
-						isPrimary: data.is_primary ?? existing.isPrimary,
-					},
+		const updated = await withTransaction(async (tx) => {
+			if (data.is_primary && !existing.isPrimary) {
+				await tx.withdrawInfo.updateMany({
+					where: { userId: user.id },
+					data: { isPrimary: false },
 				});
-			},
-		);
+			}
 
-		return json(updated);
+			return tx.withdrawInfo.update({
+				where: { id: existing.id },
+				data: {
+					stellarAddress: data.stellar_address,
+					memo: data.memo ?? null,
+					memoType: data.memo_type ?? "none",
+					destinationLabel: data.destination_label ?? null,
+					isPrimary: data.is_primary ?? existing.isPrimary,
+				},
+			});
+		});
+
+		return json(serializeWithdrawInfo(updated));
 	});
 }
 
@@ -59,7 +58,7 @@ export async function DELETE(
 
 		const existing = await findDestinationOr404(id, user.id);
 
-		await prisma.$transaction(async (tx: PrismaTransaction) => {
+		await withTransaction(async (tx) => {
 			await tx.withdrawInfo.delete({ where: { id: existing.id } });
 
 			if (existing.isPrimary) {

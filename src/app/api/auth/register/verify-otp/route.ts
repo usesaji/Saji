@@ -9,7 +9,7 @@
  */
 
 import { z } from "zod";
-import { prisma, type PrismaTransaction } from "@/server/db";
+import { withTransaction } from "@/server/db";
 import {
 	generateSignupToken,
 	hashSignupToken,
@@ -50,7 +50,7 @@ export async function POST(request: Request) {
 		const body = await parseBody(request, schema);
 		const email = body.email.toLowerCase();
 
-		const plainToken = await prisma.$transaction(async (tx: PrismaTransaction) => {
+		const plainToken = await withTransaction(async (tx) => {
 			// Lock the row so concurrent verifies serialise. Prisma has no
 			// lockForUpdate() helper, so this is raw SQL — the read below then
 			// sees the locked row within the same transaction.

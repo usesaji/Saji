@@ -12,6 +12,7 @@ import { z } from "zod";
 import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json, parseQuery } from "@/server/http";
+import { serializeTransaction } from "@/server/serializers";
 import type { Prisma } from "@prisma/client";
 
 const schema = z.object({
@@ -58,7 +59,7 @@ export async function GET(request: Request) {
 		]);
 
 		return json({
-			data,
+			data: data.map((tx) => ({ ...serializeTransaction(tx), group: tx.group })),
 			current_page: params.page,
 			per_page: params.per_page,
 			total,

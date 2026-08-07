@@ -115,6 +115,16 @@ export default function GroupPreviewPage() {
 			router.replace(pageRoutes.dashboardRoutes.CIRCLE(groupId));
 		}
 	}, [shouldRedirect, groupId, router]);
+
+	// A challenge has no rotation/payout-order forming step — none of the
+	// checklist below applies to it. Send it straight to its own view rather
+	// than rendering the rotating-circle "forming" UI for a group that will
+	// never have a cycle to start.
+	useEffect(() => {
+		if (data?.circle_kind === "challenge") {
+			router.replace(pageRoutes.dashboardRoutes.CHALLENGE(groupId));
+		}
+	}, [data?.circle_kind, groupId, router]);
 	const onchainMembers = new Set(
 		(chain?.members ?? []).map((a) => a.toLowerCase()),
 	);

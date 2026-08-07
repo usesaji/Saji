@@ -10,7 +10,7 @@
  */
 
 import { z } from "zod";
-import { prisma } from "@/server/db";
+import { prisma, withTransaction } from "@/server/db";
 import { generateOtp, hashOtp } from "@/server/auth";
 import { clientIp, handle, json, parseBody, rateLimit } from "@/server/http";
 import { sendOtpEmail } from "@/server/mail";
@@ -39,12 +39,15 @@ export async function POST(request: Request) {
 			const expiresAt = new Date(Date.now() + TTL_MINUTES * 60_000);
 
 			// One live code per address: drop any previous, unverified request.
-			await prisma.$transaction([
-				prisma.otpCode.deleteMany({ where: { email } }),
-				prisma.otpCode.create({
-					data: { email, codeHash: await hashOtp(code), expiresAt },
-				}),
-			]);
+			// Uses withTransaction (retries on P2028) rather than the array-batch
+			// form — Prisma's batch $transaction still opens a single BEGIN/COMMIT
+			// around both statements, so it has the same pooler session-affinity
+			// requirement as the interactive form, just without the callback.
+			const codeHash = await hashOtp(code);
+			await withTransaction(async (tx) => {
+				await tx.otpCode.deleteMany({ where: { email } });
+				await tx.otpCode.create({ data: { email, codeHash, expiresAt } });
+			});
 
 			await sendOtpEmail(email, code, TTL_MINUTES);
 		}

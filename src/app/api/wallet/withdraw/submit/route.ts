@@ -17,6 +17,7 @@ import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { HttpError, handle, json, parseBody } from "@/server/http";
 import { explorerUrl, submitSignedXdr } from "@/server/stellar/service";
+import { serializeTransaction } from "@/server/serializers";
 
 const schema = z.object({
 	signed_xdr: z.string().min(1),
@@ -50,6 +51,6 @@ export async function POST(request: Request) {
 			},
 		});
 
-		return json(tx, 201);
+		return json(serializeTransaction(tx), 201);
 	});
 }

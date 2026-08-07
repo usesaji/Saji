@@ -12,9 +12,10 @@
  */
 
 import { z } from "zod";
-import { prisma, type PrismaTransaction } from "@/server/db";
+import { prisma, withTransaction } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json, parseBody } from "@/server/http";
+import { serializeWithdrawInfo } from "@/server/serializers";
 
 export const destinationSchema = z.object({
 	// Stellar StrKey public address: starts with G, base32, 56 chars.
@@ -37,7 +38,7 @@ export async function GET(request: Request) {
 			orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }],
 		});
 
-		return json(destinations);
+		return json(destinations.map(serializeWithdrawInfo));
 	});
 }
 
@@ -47,7 +48,7 @@ export async function POST(request: Request) {
 		const user = await requireUser(request);
 		const data = await parseBody(request, destinationSchema);
 
-		const info = await prisma.$transaction(async (tx: PrismaTransaction) => {
+		const info = await withTransaction(async (tx) => {
 			const isFirst =
 				(await tx.withdrawInfo.count({ where: { userId: user.id } })) === 0;
 
@@ -73,6 +74,6 @@ export async function POST(request: Request) {
 			});
 		});
 
-		return json(info, 201);
+		return json(serializeWithdrawInfo(info), 201);
 	});
 }

@@ -206,6 +206,56 @@ model OtpCode {
   @@map("otp_codes")
 }
 
+/// The OAuth callback's handoff to its landing page.
+///
+/// The callback is a full-page redirect (Google sends the browser here
+/// directly) so it cannot return JSON — it cannot hand back the real bearer
+/// token without putting it on the URL, where it would sit in browser
+/// history and be exposed to anything that reads `window.location` before
+/// the landing page clears it. Instead it mints one of these: `codeHash`
+/// goes on the URL, `token` is redeemed for exactly once via a POST body.
+///
+/// DB-backed rather than an in-memory Map because the callback and the
+/// exchange request are two separate HTTP requests that are not guaranteed
+/// to land on the same serverless instance.
+model OauthHandoff {
+  id   BigInt @id @default(autoincrement())
+  // Only the hash is stored — same reasoning as AccessToken.tokenHash.
+  codeHash String @unique @map("code_hash")
+  // The real bearer token this code redeems for.
+  token String
+
+  expiresAt DateTime @map("expires_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@map("oauth_handoffs")
+}
+
+/// Proof-of-control challenge for linking a Stellar wallet.
+///
+/// `PATCH /api/profile/wallet` must not accept an address the caller doesn't
+/// actually hold the key for — see `src/server/wallet-proof.ts`. This is the
+/// nonce issued for one address to sign; only one may be active per address
+/// (a fresh challenge invalidates any earlier unredeemed one for the same
+/// address, so a stale request can't be replayed after a new one is issued).
+///
+/// DB-backed for the same cross-instance reason as OauthHandoff: the
+/// challenge is issued by one request and redeemed by a separate one.
+model WalletChallenge {
+  id      BigInt @id @default(autoincrement())
+  address String @unique
+
+  nonce String
+
+  expiresAt DateTime @map("expires_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("wallet_challenges")
+}
+
 // ---------------------------------------------------------------------------
 // Groups (savings circles — Ajo / Esusu / Susu)
 // ---------------------------------------------------------------------------

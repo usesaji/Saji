@@ -14,6 +14,8 @@ import { requireUser } from "@/server/auth";
 import { handle, json, parseBody, validationError } from "@/server/http";
 import { findGroupOr404 } from "@/server/groups";
 import { assertChallengeMember } from "@/server/challenges";
+import { serializeChallengeDeposit } from "@/server/serializers";
+import { reconcileAfterResponse } from "@/server/stellar/reconcile";
 
 const schema = z.object({
 	amount: z.union([
@@ -62,6 +64,11 @@ export async function POST(
 			},
 		});
 
-		return json(deposit, 201);
+		// Reconcile against the challenge contract's balance_of right away so
+		// the row doesn't sit pending until the next cron sweep — mirrors
+		// contributions/confirm's "reconcile faster" trigger for circles.
+		reconcileAfterResponse(group.id);
+
+		return json(serializeChallengeDeposit(deposit), 201);
 	});
 }

@@ -6,7 +6,7 @@
  * database runs out of connections within a few minutes of editing.
  */
 
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 const globalForPrisma = globalThis as unknown as {
@@ -79,6 +79,47 @@ export const prisma = globalForPrisma.prisma ?? createClient();
 
 if (process.env.NODE_ENV !== "production") {
 	globalForPrisma.prisma = prisma;
+}
+
+/**
+ * Run an interactive transaction, retrying once or twice on P2028.
+ *
+ * Even on the DIRECT (session-mode) connection and even with `maxWait`/
+ * `timeout` raised to 15s, Supabase's free-tier pooler has been observed to
+ * fail an interactive transaction's opening `BEGIN` outright with P2028
+ * ("Unable to start a transaction in the given time") — confirmed live in dev
+ * on `/auth/register/complete-profile`, which then succeeded on the very next
+ * attempt with no code change. That shape — fails, retried the same call
+ * succeeds — is exactly what a short retry buys you and what a longer
+ * timeout does not, since the first attempt wasn't slow, it was refused.
+ *
+ * Every call site using this MUST be safe to run twice: either the work
+ * inside is naturally idempotent, or a retry after a genuine partial failure
+ * would just redo work that already failed to commit (transactions roll back
+ * atomically, so there is no partial-commit case to worry about here).
+ */
+export async function withTransaction<T>(
+	fn: (tx: PrismaTransaction) => Promise<T>,
+	attempts = 3,
+): Promise<T> {
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		try {
+			return await prisma.$transaction(fn);
+		} catch (error) {
+			const isP2028 =
+				error instanceof Prisma.PrismaClientKnownRequestError &&
+				error.code === "P2028";
+
+			if (!isP2028 || attempt === attempts) throw error;
+
+			// Short, increasing backoff — this is bridging a connection-handoff
+			// hiccup, not waiting out real contention.
+			await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
+		}
+	}
+
+	// Unreachable: the loop always returns or throws. Satisfies the compiler.
+	throw new Error("withTransaction: exhausted attempts without resolution.");
 }
 
 /**

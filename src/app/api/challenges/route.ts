@@ -11,9 +11,10 @@
  */
 
 import { z } from "zod";
-import { prisma, type PrismaTransaction } from "@/server/db";
+import { prisma, withTransaction } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json, parseBody, parseQuery } from "@/server/http";
+import { serializeGroup } from "@/server/serializers";
 import type { Prisma } from "@prisma/client";
 
 const listSchema = z.object({
@@ -50,10 +51,10 @@ export async function GET(request: Request) {
 		]);
 
 		return json({
-			data: circles.map((circle) => {
-				const { _count, ...rest } = circle;
-				return { ...rest, member_count: _count.members };
-			}),
+			data: circles.map((circle) => ({
+				...serializeGroup(circle),
+				member_count: circle._count.members,
+			})),
 			current_page: params.page,
 			per_page: params.per_page,
 			total,
@@ -86,7 +87,7 @@ export async function POST(request: Request) {
 		const user = await requireUser(request);
 		const data = await parseBody(request, createSchema);
 
-		const group = await prisma.$transaction(async (tx: PrismaTransaction) => {
+		const group = await withTransaction(async (tx) => {
 			const created = await tx.group.create({
 				data: {
 					name: data.name,
@@ -125,6 +126,6 @@ export async function POST(request: Request) {
 			return created;
 		});
 
-		return json({ ...group, member_count: 1 }, 201);
+		return json({ ...serializeGroup(group), member_count: 1 }, 201);
 	});
 }

@@ -5,7 +5,7 @@
  */
 
 import { z } from "zod";
-import { prisma, type PrismaTransaction } from "@/server/db";
+import { prisma, withTransaction } from "@/server/db";
 import { requireUser, generateInviteToken } from "@/server/auth";
 import { handle, json, parseBody } from "@/server/http";
 import {
@@ -15,6 +15,7 @@ import {
 	tokenSac,
 } from "@/server/groups";
 import { buildCreateGroupTx, toStroops } from "@/server/stellar/service";
+import { serializeGroupWithCount, serializeGroup } from "@/server/serializers";
 
 /** Groups the authenticated user organizes or belongs to. */
 export async function GET(request: Request) {
@@ -32,13 +33,8 @@ export async function GET(request: Request) {
 			orderBy: { createdAt: "desc" },
 		});
 
-		// Flatten Prisma's `_count` into the `members_count` key the frontend
-		// already reads (Laravel's withCount() naming).
 		return json(
-			groups.map((group) => {
-				const { _count, ...rest } = group;
-				return { ...rest, members_count: _count.members };
-			}),
+			groups.map((group) => serializeGroupWithCount(group, group._count.members)),
 		);
 	});
 }
@@ -104,7 +100,7 @@ export async function POST(request: Request) {
 			data.cycle_length_days,
 		);
 
-		const group = await prisma.$transaction(async (tx: PrismaTransaction) => {
+		const group = await withTransaction(async (tx) => {
 			const created = await tx.group.create({
 				data: {
 					name: data.name,
@@ -173,6 +169,6 @@ export async function POST(request: Request) {
 			}
 		}
 
-		return json({ group, unsigned_xdr: unsignedXdr }, 201);
+		return json({ group: serializeGroup(group), unsigned_xdr: unsignedXdr }, 201);
 	});
 }

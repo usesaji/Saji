@@ -17,7 +17,7 @@ import {
 	verifyPassword,
 } from "@/server/auth";
 import { createHash } from "node:crypto";
-import { handle, json, parseBody, validationError } from "@/server/http";
+import { handle, json, parseBody, rateLimit, validationError } from "@/server/http";
 
 const schema = z
 	.object({
@@ -38,6 +38,12 @@ const schema = z
 export async function POST(request: Request) {
 	return handle(async () => {
 		const user = await requireUser(request);
+
+		// Keyed by user, not IP: a stolen bearer token is what's actually being
+		// brute-forced against `current_password` here, and that threat doesn't
+		// need to come from one IP. Same budget as login's per-IP limit.
+		rateLimit(`profile-password:${user.id}`, 6, 60);
+
 		const data = await parseBody(request, schema);
 
 		if (user.password) {

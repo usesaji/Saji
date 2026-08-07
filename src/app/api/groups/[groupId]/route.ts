@@ -8,6 +8,7 @@ import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json } from "@/server/http";
 import { assertVisible, findGroupOr404 } from "@/server/groups";
+import { serializeGroup, serializeMember } from "@/server/serializers";
 
 export async function GET(
 	request: Request,
@@ -36,6 +37,16 @@ export async function GET(
 			orderBy: [{ payoutPosition: "asc" }, { createdAt: "asc" }],
 		});
 
-		return json({ ...group, members, members_count: members.length });
+		// serializeGroup/serializeMember are NOT optional here — see the warning
+		// in src/server/serializers.ts. Returning raw Prisma objects (camelCase)
+		// against a frontend built for Eloquent's snake_case JSON silently
+		// breaks every `data.organizer_id` / `m.user_id` lookup on the client.
+		const membersOut = members.map(serializeMember);
+
+		return json({
+			...serializeGroup(group),
+			members: membersOut,
+			members_count: membersOut.length,
+		});
 	});
 }

@@ -9,7 +9,7 @@
  */
 
 import { z } from "zod";
-import { prisma, type PrismaTransaction } from "@/server/db";
+import { withTransaction } from "@/server/db";
 import { createToken, hashPassword, hashSignupToken } from "@/server/auth";
 import { handle, json, parseBody, validationError } from "@/server/http";
 import { publicUser } from "@/server/serializers";
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
 	return handle(async () => {
 		const data = await parseBody(request, schema);
 
-		const user = await prisma.$transaction(async (tx: PrismaTransaction) => {
+		const user = await withTransaction(async (tx) => {
 			const otp = await tx.otpCode.findUnique({
 				where: { signupTokenHash: hashSignupToken(data.signup_token) },
 			});

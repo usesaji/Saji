@@ -9,6 +9,7 @@ import { requireUser } from "@/server/auth";
 import { handle, json, notFound } from "@/server/http";
 import { assertOrganizer, findGroupOr404, parseBigInt } from "@/server/groups";
 import { buildJoinGroupTx } from "@/server/stellar/service";
+import { serializeMember } from "@/server/serializers";
 
 export async function POST(
 	request: Request,
@@ -31,22 +32,25 @@ export async function POST(
 
 		if (!existing || existing.groupId !== group.id) throw notFound("Member");
 
-		const member = await prisma.$transaction(async (tx) => {
-			// Recompute the next position inside the transaction so two
-			// simultaneous approvals cannot land on the same slot.
-			const last = await tx.groupMember.aggregate({
-				where: { groupId: group.id },
-				_max: { payoutPosition: true },
-			});
+		// No interactive transaction here: Supabase's pooler can reject a
+		// $transaction's opening BEGIN outright (P2028), and this read-then-write
+		// has no hard invariant to protect — the worst case of a genuine
+		// simultaneous double-approval is two members sharing a payoutPosition,
+		// which is a cosmetic ordering glitch (re-sequenced later via the
+		// payout-order screen), not a money-safety issue. Not worth the P2028
+		// exposure to close a race this narrow.
+		const last = await prisma.groupMember.aggregate({
+			where: { groupId: group.id },
+			_max: { payoutPosition: true },
+		});
 
-			return tx.groupMember.update({
-				where: { id: existing.id },
-				data: {
-					status: "approved",
-					payoutPosition: (last._max.payoutPosition ?? 0) + 1,
-					joinedAt: new Date(),
-				},
-			});
+		const member = await prisma.groupMember.update({
+			where: { id: existing.id },
+			data: {
+				status: "approved",
+				payoutPosition: (last._max.payoutPosition ?? 0) + 1,
+				joinedAt: new Date(),
+			},
 		});
 
 		// Non-custodial: admitting a member on-chain is authorized by the
@@ -73,6 +77,6 @@ export async function POST(
 			}
 		}
 
-		return json({ member, unsigned_xdr: unsignedXdr });
+		return json({ member: serializeMember(member), unsigned_xdr: unsignedXdr });
 	});
 }

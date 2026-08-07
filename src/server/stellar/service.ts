@@ -62,6 +62,15 @@ export const RPC_URL = required(
 export const CONTRACT_ID = process.env.STELLAR_CONTRACT_ID ?? "";
 
 /**
+ * The deployed challenge (public savings) contract — server-side twin of
+ * `NEXT_PUBLIC_CHALLENGE_CONTRACT_ID`. A SEPARATE contract from `CONTRACT_ID`
+ * (savings/rotating circles): each contract has one token balance, so this
+ * must never be conflated with the savings contract id.
+ */
+export const CHALLENGE_CONTRACT_ID =
+	process.env.STELLAR_CHALLENGE_CONTRACT_ID ?? "";
+
+/**
  * A funded account used only as the source for read simulations. Reads never
  * submit, so this key is never spent and never needs to sign — but Soroban
  * still requires a valid source account on the envelope.
@@ -79,6 +88,14 @@ function assertConfigured(): void {
 	if (!CONTRACT_ID) {
 		throw new Error(
 			"STELLAR_CONTRACT_ID is not set; deploy the contract first.",
+		);
+	}
+}
+
+function assertChallengeConfigured(): void {
+	if (!CHALLENGE_CONTRACT_ID) {
+		throw new Error(
+			"STELLAR_CHALLENGE_CONTRACT_ID is not set; deploy the challenge contract first.",
 		);
 	}
 }
@@ -142,7 +159,11 @@ async function simulate<T>(
 	args: xdr.ScVal[],
 	contractId = CONTRACT_ID,
 ): Promise<T> {
-	assertConfigured();
+	if (!contractId) {
+		throw new Error(
+			"No contract id configured for this read; deploy the contract first.",
+		);
+	}
 
 	if (!READ_SOURCE) {
 		throw new Error(
@@ -258,6 +279,41 @@ export async function hasContributed(
 }
 
 /**
+ * Whether `member` has been removed (defaulted) from a group on-chain.
+ *
+ * A removed member no longer owes a contribution, so their absence must not
+ * block the "everyone paid" auto-payout check, and the DB membership should
+ * reflect the removal so the circle can see what happened.
+ */
+export async function isRemoved(
+	groupId: number | bigint,
+	member: string,
+): Promise<boolean> {
+	return simulate<boolean>("is_removed", [u64(groupId), addr(member)]);
+}
+
+/**
+ * The address that will receive the current cycle's payout, or null once
+ * every active member has already received their turn.
+ *
+ * Mirrors `trigger_payout`'s own recipient selection (contract doc comment at
+ * `next_recipient`), so reading this before calling `triggerPayout` tells the
+ * indexer exactly who is about to be paid without re-deriving that logic.
+ */
+export async function nextRecipient(
+	groupId: number | bigint,
+): Promise<string | null> {
+	try {
+		return await simulate<string>("next_recipient", [u64(groupId)]);
+	} catch (error) {
+		// GroupNotFound (#1) is how the contract signals "nobody left to pay" —
+		// see `remaining_recipients` in trigger_payout.
+		if (String(error).includes("Error(Contract, #1)")) return null;
+		throw error;
+	}
+}
+
+/**
  * A token balance for an account, in stroops.
  *
  * Defaults to the configured USDC SAC. Note this reads the TOKEN contract, not
@@ -290,6 +346,31 @@ export async function claimableOf(
 	]);
 
 	return value === null ? 0n : BigInt(value);
+}
+
+/**
+ * How much `member` has saved in a challenge, in stroops — read from the
+ * SEPARATE challenge contract, not the savings contract.
+ *
+ * This is the challenge contract's own source of truth (its `balance_of` doc
+ * comment: "the app's source of truth for progress... the figure is the
+ * money itself, not a record of it"), so this is what the DB's
+ * `ChallengeDeposit.status` should be reconciled against, the same way
+ * `hasContributed` is what rotating-circle contributions reconcile against.
+ */
+export async function getChallengeBalance(
+	challengeId: number | bigint,
+	member: string,
+): Promise<bigint> {
+	assertChallengeConfigured();
+
+	return BigInt(
+		await simulate<bigint>(
+			"balance_of",
+			[u64(challengeId), addr(member)],
+			CHALLENGE_CONTRACT_ID,
+		),
+	);
 }
 
 /**

@@ -14,11 +14,12 @@
  */
 
 import { z } from "zod";
-import { prisma, type PrismaTransaction } from "@/server/db";
+import { prisma, withTransaction } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { HttpError, handle, json, parseBody } from "@/server/http";
 import { assertOrganizer, findGroupOr404 } from "@/server/groups";
 import { buildSetPayoutOrderTx } from "@/server/stellar/service";
+import { serializeMember } from "@/server/serializers";
 
 const schema = z.object({
 	// Accepts numbers or numeric strings: ids are serialised as strings
@@ -77,8 +78,10 @@ export async function POST(
 		}
 
 		// Persist positions 1..n in the submitted order, atomically — a partial
-		// write would leave two members sharing a position.
-		await prisma.$transaction(async (tx: PrismaTransaction) => {
+		// write would leave two members sharing a position. Safe to retry on
+		// P2028: rewriting the same target positions twice converges to the
+		// same end state, it doesn't compound.
+		await withTransaction(async (tx) => {
 			for (const [index, userId] of submitted.entries()) {
 				await tx.groupMember.updateMany({
 					where: { groupId: group.id, userId },
@@ -124,10 +127,23 @@ export async function POST(
 
 		const ordered = await prisma.groupMember.findMany({
 			where: { groupId: group.id },
-			include: { user: { select: { id: true, name: true } } },
+			include: {
+				user: {
+					select: {
+						id: true,
+						name: true,
+						tagName: true,
+						avatarUrl: true,
+						stellarAddress: true,
+					},
+				},
+			},
 			orderBy: { payoutPosition: "asc" },
 		});
 
-		return json({ members: ordered, unsigned_xdr: unsignedXdr });
+		return json({
+			members: ordered.map(serializeMember),
+			unsigned_xdr: unsignedXdr,
+		});
 	});
 }

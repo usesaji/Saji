@@ -16,6 +16,7 @@ import { HttpError, forbidden, handle, json, parseBody } from "@/server/http";
 import { findGroupOr404 } from "@/server/groups";
 import { explorerUrl, submitSignedXdr } from "@/server/stellar/service";
 import { reconcileAfterResponse } from "@/server/stellar/reconcile";
+import { serializeTransaction } from "@/server/serializers";
 
 const schema = z.object({
 	signed_xdr: z.string().min(1),
@@ -74,6 +75,6 @@ export async function POST(
 
 		reconcileAfterResponse(group.id);
 
-		return json(tx, 201);
+		return json(serializeTransaction(tx), 201);
 	});
 }

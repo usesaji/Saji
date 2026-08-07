@@ -220,16 +220,6 @@ export const auth = {
 		});
 	},
 
-	/** Single-shot register (name + email + password), no OTP flow. */
-	register(input: {
-		name: string;
-		email: string;
-		password: string;
-		password_confirmation: string;
-	}): Promise<AuthResponse> {
-		return request<AuthResponse>("/api/auth/register", { method: "POST", body: input });
-	},
-
 	login(input: { email: string; password: string }): Promise<AuthResponse> {
 		return request<AuthResponse>("/api/auth/login", { method: "POST", body: input });
 	},
@@ -237,6 +227,18 @@ export const auth = {
 	/** Full-page URL that kicks off the Google server-side OAuth flow. */
 	googleRedirectUrl(): string {
 		return `${API_URL}/api/auth/google/redirect`;
+	},
+
+	/**
+	 * Trade the single-use code on the Google-callback landing URL for the
+	 * real bearer token. Keeps the long-lived token out of the URL entirely —
+	 * see `/api/auth/google/exchange`.
+	 */
+	exchangeGoogleCode(code: string): Promise<{ token: string }> {
+		return request<{ token: string }>("/api/auth/google/exchange", {
+			method: "POST",
+			body: { code },
+		});
 	},
 
 	me(): Promise<User> {
@@ -316,14 +318,34 @@ export const profile = {
 		});
 	},
 
-	/** Link/unlink the user's Stellar wallet (public address only). */
-	linkWallet(stellar_address: string | null): Promise<{
+	/**
+	 * Request a signable proof-of-control challenge for `stellar_address`.
+	 * Sign the returned XDR with that wallet, then pass it to `linkWallet`.
+	 */
+	walletChallenge(stellar_address: string): Promise<{ unsigned_xdr: string }> {
+		return request("/api/profile/wallet/challenge", {
+			method: "POST",
+			body: { stellar_address },
+			auth: true,
+		});
+	},
+
+	/**
+	 * Link/unlink the user's Stellar wallet (public address only). Linking a
+	 * non-null address requires `signed_xdr` — the challenge from
+	 * `walletChallenge`, signed by that same wallet. Unlinking (null) needs
+	 * no proof.
+	 */
+	linkWallet(
+		stellar_address: string | null,
+		signed_xdr?: string,
+	): Promise<{
 		stellar_address: string | null;
 		linked: boolean;
 	}> {
 		return request("/api/profile/wallet", {
 			method: "PATCH",
-			body: { stellar_address },
+			body: { stellar_address, signed_xdr },
 			auth: true,
 		});
 	},
@@ -803,7 +825,22 @@ export const challenges = {
 		return request(`/api/challenges/${groupId}/leave`, { method: "POST", auth: true });
 	},
 
-	summary(groupId: number): Promise<unknown> {
+	summary(groupId: number): Promise<{
+		group: {
+			id: number;
+			name: string;
+			asset_code: string;
+			savings_target: string;
+			challenge_ends_at: string | null;
+		};
+		member_count: number;
+		group_saved_total: string;
+		members_reached_target: number;
+		hide_balances: boolean;
+		leaderboard:
+			| { user_id: number; name: string | null; saved: string; percent: number }[]
+			| null;
+	}> {
 		return request(`/api/challenges/${groupId}/summary`, { auth: true });
 	},
 

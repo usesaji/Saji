@@ -13,6 +13,7 @@ import {
 	findGroupOr404,
 } from "@/server/groups";
 import { buildContributeTx } from "@/server/stellar/service";
+import { serializeContribution } from "@/server/serializers";
 
 /** Contributions the authenticated user has made to this group. */
 export async function GET(
@@ -31,7 +32,7 @@ export async function GET(
 			orderBy: { createdAt: "desc" },
 		});
 
-		return json(contributions);
+		return json(contributions.map(serializeContribution));
 	});
 }
 
@@ -106,7 +107,7 @@ export async function POST(
 		}
 
 		return json(
-			{ contribution, unsigned_xdr: unsignedXdr },
+			{ contribution: serializeContribution(contribution), unsigned_xdr: unsignedXdr },
 			existing ? 200 : 201,
 		);
 	});

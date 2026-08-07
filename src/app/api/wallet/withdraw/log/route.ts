@@ -14,6 +14,7 @@ import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json, parseBody } from "@/server/http";
 import { explorerUrl } from "@/server/stellar/service";
+import { serializeTransaction } from "@/server/serializers";
 
 const schema = z.object({
 	// Nullable: a payout claimed STRAIGHT to the destination is settled by the
@@ -52,6 +53,6 @@ export async function POST(request: Request) {
 			},
 		});
 
-		return json(tx, 201);
+		return json(serializeTransaction(tx), 201);
 	});
 }

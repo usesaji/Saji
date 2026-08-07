@@ -32,7 +32,12 @@ export async function POST(
 			// the RPC is unreachable, retry after the response and let the cron
 			// be the final net.
 			try {
-				await runIndexer(group.id);
+				// waitForPayouts=false: this route's job is reflecting the group's
+				// own activation status back quickly, not settling someone else's
+				// payout inline — that would add up to ~9s of on-ledger
+				// confirmation polling to every activate click. The cron sweep and
+				// reconcileAfterResponse below still cover it shortly after.
+				await runIndexer(group.id, false);
 			} catch (error) {
 				console.warn("[groups] inline activate reconcile failed:", error);
 				reconcileAfterResponse(group.id);

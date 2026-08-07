@@ -5,10 +5,11 @@
  * one transaction so there is never a moment with two primaries or none.
  */
 
-import { prisma, type PrismaTransaction } from "@/server/db";
+import { withTransaction } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json } from "@/server/http";
 import { findDestinationOr404 } from "@/server/withdraw-info";
+import { serializeWithdrawInfo } from "@/server/serializers";
 
 export async function POST(
 	request: Request,
@@ -20,20 +21,18 @@ export async function POST(
 
 		const destination = await findDestinationOr404(id, user.id);
 
-		const updated = await prisma.$transaction(
-			async (tx: PrismaTransaction) => {
-				await tx.withdrawInfo.updateMany({
-					where: { userId: user.id },
-					data: { isPrimary: false },
-				});
+		const updated = await withTransaction(async (tx) => {
+			await tx.withdrawInfo.updateMany({
+				where: { userId: user.id },
+				data: { isPrimary: false },
+			});
 
-				return tx.withdrawInfo.update({
-					where: { id: destination.id },
-					data: { isPrimary: true },
-				});
-			},
-		);
+			return tx.withdrawInfo.update({
+				where: { id: destination.id },
+				data: { isPrimary: true },
+			});
+		});
 
-		return json(updated);
+		return json(serializeWithdrawInfo(updated));
 	});
 }

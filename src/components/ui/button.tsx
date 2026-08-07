@@ -146,8 +146,8 @@ function Button(props: ButtonProps) {
 			data-slot="button"
 			type={buttonProps.type ?? "button"}
 			className={classes}
-			disabled={isLoading || buttonProps.disabled}
 			{...buttonProps}
+			disabled={isLoading || buttonProps.disabled}
 		>
 			{isLoading ? (
 				<span className="flex items-center gap-2">

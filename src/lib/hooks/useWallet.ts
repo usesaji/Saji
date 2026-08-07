@@ -24,12 +24,22 @@ export function useWallet() {
 		setConnecting(true);
 		try {
 			const addr = await connectWallet();
-			// Persist to the backend so balance/contribute/withdraw resolve it.
-			await profileApi.linkWallet(addr);
+			// Prove control of `addr` before the backend will link it — sign a
+			// throwaway, never-submitted challenge transaction with the SAME
+			// wallet that just connected. See @/server/wallet-proof for why.
+			const { unsigned_xdr } = await profileApi.walletChallenge(addr);
+			const signedXdr = await signXdr(unsigned_xdr);
+			await profileApi.linkWallet(addr, signedXdr);
 			setAddress(addr);
 			toast.success("", "Wallet linked");
 			return addr;
 		} catch (err) {
+			// The wallet kit itself may already be connected even though linking
+			// failed (e.g. the user approved the connect prompt but rejected the
+			// proof-of-control signature) — disconnect it too, so the extension
+			// and the app agree on "not linked" and a retry starts clean rather
+			// than skipping the connect step next time.
+			await disconnectWallet().catch(() => {});
 			toast.error(
 				err instanceof ApiError
 					? err.message
