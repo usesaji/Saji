@@ -11,7 +11,7 @@
 // separate process that does not, so load it explicitly here. `.env` is read
 // too, for parity with deployments that use it.
 import { config as loadEnv } from "dotenv";
-import { defineConfig, env } from "prisma/config";
+import { defineConfig } from "prisma/config";
 
 loadEnv({ path: ".env.local", quiet: true });
 loadEnv({ quiet: true });
@@ -28,6 +28,8 @@ export default defineConfig({
 		// schema changes issued through it fail or silently misbehave.
 		//
 		// Falls back to DATABASE_URL for setups with a single direct connection.
-		url: env("DIRECT_URL") ?? env("DATABASE_URL"),
+		// Use process.env (not env()) so prisma generate succeeds when DIRECT_URL
+		// is unset — env() throws before the ?? fallback can run.
+		url: process.env.DIRECT_URL ?? process.env.DATABASE_URL ?? "",
 	},
 });
