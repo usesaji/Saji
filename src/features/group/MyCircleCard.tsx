@@ -143,6 +143,7 @@ const MyCircleCard = ({ circle }: MyCircleCardProps) => {
 					href={pageRoutes.dashboardRoutes.GROUP(id)}
 					variant="dark"
 					className=""
+					onClick={(e: React.MouseEvent) => e.stopPropagation()}
 				>
 					View Details
 				</Button>
