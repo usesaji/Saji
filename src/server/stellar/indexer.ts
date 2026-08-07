@@ -322,8 +322,8 @@ async function waitForTransaction(
  * `wait = false` skips this entirely rather than firing-without-confirming:
  * a triggered-but-unrecorded payout that the process gets torn down before
  * recording (a real risk on serverless, right after a response is sent)
- * would be worse than just leaving it for the next sweep — the cron runs
- * every minute, and `reconcileAfterResponse` already schedules a background
+ * would be worse than just leaving it for the next sweep — the daily cron
+ * sweep and `reconcileAfterResponse` already schedule a background
  * pass right after the same actions that call this inline.
  */
 async function triggerPayoutIfReady(

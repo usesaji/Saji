@@ -2,11 +2,10 @@
  * Scheduled chain reconciliation — the replacement for Laravel's
  * `Schedule::command('chain:index')->everyThirtySeconds()`.
  *
- * CADENCE CHANGE, deliberate: Vercel Cron's floor is one minute, so background
- * reconciliation is half as frequent as it was. The user-facing path is
- * unaffected because routes that mutate on-chain state still call
- * `runIndexer(groupId)` inline for that group. This sweep is the safety net,
- * not the main path.
+ * CADENCE CHANGE, deliberate: Vercel Hobby allows at most one cron run per
+ * day, so this sweep runs at 00:00 UTC. The user-facing path is unaffected
+ * because routes that mutate on-chain state still call `runIndexer(groupId)`
+ * inline for that group. This sweep is the safety net, not the main path.
  *
  * Idempotent, so an overlapping or retried run is harmless.
  */

@@ -14,7 +14,7 @@
  * of.
  *
  * Failures are swallowed on purpose. This is the fast path, not the source of
- * truth — if it fails, the cron sweep corrects the same state within a minute,
+ * truth — if it fails, the daily cron sweep corrects the same state,
  * and a user-visible error here would be noise about work they never asked for.
  */
 
