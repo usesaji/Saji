@@ -3,12 +3,19 @@ import { IoIosArrowRoundForward } from "react-icons/io";
 import type { ActivityRow } from "../../lib/api";
 import { formatMoney } from "../../lib/utils";
 
-/** Human title for a transaction type. */
-const TYPE_LABELS: Record<ActivityRow["type"], string> = {
+/**
+ * Human title, keyed on `kind` rather than `type`.
+ *
+ * `type` is "payout" for money coming IN from a circle and for money going OUT
+ * as a withdrawal, so labelling from it showed every withdrawal as "Payout
+ * Completed". `kind` separates the two.
+ */
+const TYPE_LABELS: Record<ActivityRow["kind"], string> = {
 	create_group: "Group Created",
 	join: "Joined Group",
 	contribution: "Contribution",
 	payout: "Payout",
+	withdrawal: "Withdrawal",
 	other: "Activity",
 };
 
@@ -30,7 +37,7 @@ function formatTime(iso: string): string {
 }
 
 const ActivityCard = ({ activity }: { activity: ActivityRow }) => {
-	const title = `${TYPE_LABELS[activity.type]} ${STATUS_LABELS[activity.status]}`;
+	const title = `${TYPE_LABELS[activity.kind] ?? TYPE_LABELS[activity.type]} ${STATUS_LABELS[activity.status]}`;
 	const amount = formatMoney(activity.amount);
 	const groupName = activity.group?.name;
 

@@ -12,7 +12,6 @@ import {
 	assertVisible,
 	findGroupOr404,
 } from "@/server/groups";
-import { buildContributeTx } from "@/server/stellar/service";
 import { serializeContribution } from "@/server/serializers";
 
 /** Contributions the authenticated user has made to this group. */
@@ -87,27 +86,15 @@ export async function POST(
 				},
 			}));
 
-		// Non-custodial: the MEMBER's wallet signs the on-chain contribute.
+		// Non-custodial: the MEMBER's wallet signs the on-chain contribute, in the
+		// browser, via the contract bindings. This endpoint's job is recording the
+		// intent row; the chain decides whether it becomes `confirmed`, through
+		// the indexer.
 		//
-		// Best-effort. The frontend now settles on-chain directly via the
-		// contract bindings, so this endpoint's real job is recording the intent
-		// row. If the build fails we still return the contribution rather than
-		// 500, and the frontend proceeds with its own signing.
-		let unsignedXdr: string | null = null;
-
-		if (user.stellarAddress && group.onchainGroupId !== null) {
-			try {
-				unsignedXdr = await buildContributeTx(
-					user.stellarAddress,
-					group.onchainGroupId,
-				);
-			} catch (error) {
-				console.warn("[contributions] could not build contribute XDR:", error);
-			}
-		}
-
+		// The unsigned contribute XDR this used to build alongside was never read
+		// by any caller — see the note in `POST /api/groups`.
 		return json(
-			{ contribution: serializeContribution(contribution), unsigned_xdr: unsignedXdr },
+			{ contribution: serializeContribution(contribution) },
 			existing ? 200 : 201,
 		);
 	});

@@ -1,9 +1,8 @@
 import type { NextConfig } from "next";
 
-// Allow next/image to load user/group uploads served off the backend's /storage,
-// plus Google avatar URLs from OAuth sign-in. Local dev backends (127.0.0.1 /
-// localhost:8000) are always allowed, plus whatever NEXT_PUBLIC_API_URL points
-// at (a tunnel URL, a deployed api host, etc.).
+// Allow next/image to load user/group uploads from the Cloudflare R2 public
+// domain, plus Google avatar URLs from OAuth sign-in.
+//
 // `port` is required (use "" for the protocol's default port): omitting it
 // makes Next imply the `**` wildcard, allowing any port on that host.
 type Pattern = {
@@ -14,39 +13,36 @@ type Pattern = {
 };
 
 const patterns: Pattern[] = [
-  { protocol: "http", hostname: "127.0.0.1", port: "8000", pathname: "/storage/**" },
-  { protocol: "http", hostname: "localhost", port: "8000", pathname: "/storage/**" },
   { protocol: "https", hostname: "lh3.googleusercontent.com", port: "", pathname: "/**" },
 ];
 
-// Also allow the configured API origin, if it's something other than local.
+// The R2 public domain (a Connected Domain, or the r2.dev subdomain in dev).
+// This is NOT the S3 endpoint — `<account>.r2.cloudflarestorage.com` requires a
+// SigV4 signature on every request and will 401 the image optimizer.
 try {
-  const api = new URL(process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000");
-  const host = api.hostname;
-  if (host !== "127.0.0.1" && host !== "localhost") {
-    patterns.push({
-      protocol: api.protocol.replace(":", "") as "http" | "https",
-      hostname: host,
-      // URL.port is "" for a default-port URL, which is exactly what
-      // remotePatterns wants. Omitting `port` entirely would imply the `**`
-      // wildcard and allow ANY port on that host.
-      port: api.port,
-      pathname: "/storage/**",
-    });
-  }
+  const r2 = new URL(process.env.NEXT_PUBLIC_R2_PUBLIC_URL ?? "");
+  patterns.push({
+    protocol: r2.protocol.replace(":", "") as "http" | "https",
+    hostname: r2.hostname,
+    // URL.port is "" for a default-port URL, which is exactly what
+    // remotePatterns wants. Omitting `port` entirely would imply the `**`
+    // wildcard and allow ANY port on that host.
+    port: r2.port,
+    pathname: "/**",
+  });
 } catch {
-  /* invalid URL — the local defaults above still apply */
+  /* unset or invalid — uploads simply won't render until it's configured */
 }
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
   images: {
     remotePatterns: patterns,
-    // Serve images directly instead of proxying through Next's optimizer. Our
-    // uploads come from a self-hosted backend (a private/loopback IP in dev),
-    // which the optimizer refuses to fetch ("resolved to private ip"). Uploads
-    // are already appropriately sized, so optimization adds little here.
-    unoptimized: true,
+    // Optimization is ON. It was previously disabled because uploads were
+    // served off a self-hosted backend on a private/loopback IP, which the
+    // optimizer refuses to fetch ("resolved to private ip"). R2 serves from a
+    // public domain, so that constraint is gone and avatars get properly
+    // resized instead of shipping full-size originals to every dashboard.
   },
 };
 

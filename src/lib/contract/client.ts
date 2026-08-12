@@ -69,6 +69,18 @@ export function challengeClient(publicKey: string): ChallengeClient {
 }
 
 /**
+ * Per-call options every state-changing contract call should pass.
+ *
+ * `restore` is a MethodOption, not a ClientOption, so it cannot be set once on
+ * the client — each bindings method takes its own. Soroban ARCHIVES persistent
+ * entries when their TTL lapses; without this the SDK throws "You need to
+ * restore some contract state before you can invoke this method", which reached
+ * the user verbatim with no recovery path anywhere in the app. With it the SDK
+ * submits the RestoreFootprint operation and retries.
+ */
+export const CALL_OPTIONS = { restore: true } as const;
+
+/**
  * Assemble → sign → submit a state-changing contract call. `build` returns the
  * AssembledTransaction from a bindings method; we sign+send it and return the
  * on-chain result.

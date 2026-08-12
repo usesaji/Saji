@@ -26,7 +26,7 @@ export async function POST(request: Request) {
 	return handle(async () => {
 		// Laravel had `throttle:6,1` on this route: 6 requests per minute. These
 		// endpoints mail codes, so they are the natural target for mail-bombing.
-		rateLimit(`otp-start:${clientIp(request)}`, 6, 60);
+		await rateLimit(`otp-start:${clientIp(request)}`, 6, 60);
 
 		const { email: rawEmail } = await parseBody(request, schema);
 		const email = rawEmail.toLowerCase();

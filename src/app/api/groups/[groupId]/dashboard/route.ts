@@ -10,8 +10,12 @@
 
 import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
-import { handle, json } from "@/server/http";
-import { assertVisible, findGroupOr404 } from "@/server/groups";
+import { HttpError, handle, json } from "@/server/http";
+import {
+	assertVisible,
+	findGroupOr404,
+	viewershipOf,
+} from "@/server/groups";
 import { fromStroops, toStroops } from "@/server/stellar/service";
 
 /** How many recent on-chain events to show. */
@@ -30,6 +34,15 @@ export async function GET(
 		// Pool balance, next recipient, and contribution progress are private
 		// to the circle — gate on membership, not just authentication.
 		await assertVisible(group, user.id);
+
+		// Same reasoning as the circle route: a pending requester may see that
+		// the circle exists and what its rules are, not its money.
+		if ((await viewershipOf(group, user.id)) === "pending") {
+			throw new HttpError(
+				403,
+				"Your request to join is still pending. You'll see the circle's activity once the organizer approves you.",
+			);
+		}
 
 		const [memberCount, contributions, payouts, recentActivity] =
 			await Promise.all([

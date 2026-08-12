@@ -4,9 +4,9 @@ import Image from "next/image";
 import Link from "next/link";
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
-import { IoNotifications } from "react-icons/io5";
 import { pageRoutes } from "../../config/routes";
 import InputField from "../ui/custom/InputField";
+import NotificationBell from "../../features/notifications/NotificationBell";
 import { CiSearch } from "react-icons/ci";
 import { useApi } from "../../lib/hooks/useApi";
 import { profile as profileApi, assetUrl } from "../../lib/api";
@@ -65,18 +65,11 @@ export default function Header() {
 					</form>
 				</div>
 				<div className="flex items-center gap-3.5">
-					{/* This opens the activity log. It's labelled "Activity" rather than
-					    "Notifications" because there is no separate notifications feed
-					    yet — a real unread badge (pending join requests, your turn to
-					    contribute, payout received) needs a backend count endpoint;
-					    faking a dot here would be dishonest. */}
-					<Link
-						href={pageRoutes.dashboardRoutes.NOTIFICATIONS}
-						aria-label="Activity"
-						title="Activity"
-					>
-						<IoNotifications className="text-2xl md:text-3xl" />
-					</Link>
+					{/* A real unread count now backs this, so it is finally labelled
+					    "Notifications" rather than "Activity". Rows are raised the
+					    moment an action completes and pushed over Realtime — see
+					    `useNotifications`. */}
+					<NotificationBell />
 					<Link
 						href={pageRoutes.dashboardRoutes.ME}
 						className="h-10.75 w-10.75 rounded-full overflow-hidden bg-primary items-center justify-center"

@@ -9,7 +9,7 @@
  */
 
 import { z } from "zod";
-import { withTransaction } from "@/server/db";
+import { prisma, withTransaction } from "@/server/db";
 import {
 	generateSignupToken,
 	hashSignupToken,
@@ -45,12 +45,25 @@ function rejectCode(): never {
 
 export async function POST(request: Request) {
 	return handle(async () => {
-		rateLimit(`otp-verify:${clientIp(request)}`, 6, 60);
+		await rateLimit(`otp-verify:${clientIp(request)}`, 6, 60);
 
 		const body = await parseBody(request, schema);
 		const email = body.email.toLowerCase();
 
-		const plainToken = await withTransaction(async (tx) => {
+		/**
+		 * A wrong code must NOT throw from inside the transaction.
+		 *
+		 * The previous version incremented `attempts` and then threw, both inside
+		 * `withTransaction`. The throw rolls the transaction back — including the
+		 * increment — so `attempts` was permanently 0 and the `lockedOut` check
+		 * below could never fire. That left a 4-digit code (10,000 combinations,
+		 * 10-minute TTL) defended only by an in-memory, per-instance rate limiter,
+		 * i.e. brute-forceable to account takeover for any target email.
+		 *
+		 * So the transaction now RETURNS the outcome and the failure is recorded
+		 * in its own committed statement afterwards.
+		 */
+		const outcome = await withTransaction(async (tx) => {
 			// Lock the row so concurrent verifies serialise. Prisma has no
 			// lockForUpdate() helper, so this is raw SQL — the read below then
 			// sees the locked row within the same transaction.
@@ -64,16 +77,12 @@ export async function POST(request: Request) {
 			const expired = !otp || otp.expiresAt < new Date();
 			const lockedOut = otp ? otp.attempts >= MAX_ATTEMPTS : false;
 
-			if (!otp || expired || lockedOut) rejectCode();
+			if (!otp || expired || lockedOut) return { kind: "reject" as const };
 
 			// bcrypt.compare is constant-time, so a wrong code leaks no timing
 			// hint about how much of it was right.
 			if (!(await verifyOtp(body.otp, otp.codeHash))) {
-				await tx.otpCode.update({
-					where: { id: otp.id },
-					data: { attempts: { increment: 1 } },
-				});
-				rejectCode();
+				return { kind: "wrong" as const, otpId: otp.id };
 			}
 
 			// Correct: mint a single-use token and clear the code so it cannot
@@ -92,9 +101,23 @@ export async function POST(request: Request) {
 				},
 			});
 
-			return token;
+			return { kind: "ok" as const, token };
 		});
 
-		return json({ message: "Email verified.", signup_token: plainToken });
+		if (outcome.kind === "wrong") {
+			// Outside the transaction, so this actually commits. Best-effort: a
+			// failure here must still reject the code rather than accept it.
+			await prisma.otpCode
+				.update({
+					where: { id: outcome.otpId },
+					data: { attempts: { increment: 1 } },
+				})
+				.catch(() => {});
+			rejectCode();
+		}
+
+		if (outcome.kind === "reject") rejectCode();
+
+		return json({ message: "Email verified.", signup_token: outcome.token });
 	});
 }

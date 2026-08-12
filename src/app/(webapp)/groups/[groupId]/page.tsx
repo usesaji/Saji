@@ -14,7 +14,7 @@ import {
 	assetUrl,
 	ApiError,
 } from "@/lib/api";
-import { cycleDaysFor, groupToCircle, labelize } from "@/features/group/group-view";
+import { cycleSecondsFor, groupToCircle, labelize } from "@/features/group/group-view";
 import { pageRoutes } from "@/config/routes";
 import { useSavingsContract } from "@/lib/hooks/useSavingsContract";
 import { requireToken } from "@/lib/contract/tokens";
@@ -116,15 +116,6 @@ export default function GroupPreviewPage() {
 		}
 	}, [shouldRedirect, groupId, router]);
 
-	// A challenge has no rotation/payout-order forming step — none of the
-	// checklist below applies to it. Send it straight to its own view rather
-	// than rendering the rotating-circle "forming" UI for a group that will
-	// never have a cycle to start.
-	useEffect(() => {
-		if (data?.circle_kind === "challenge") {
-			router.replace(pageRoutes.dashboardRoutes.CHALLENGE(groupId));
-		}
-	}, [data?.circle_kind, groupId, router]);
 	const onchainMembers = new Set(
 		(chain?.members ?? []).map((a) => a.toLowerCase()),
 	);
@@ -203,9 +194,9 @@ export default function GroupPreviewPage() {
 			const onchainId = await createGroupOnchain({
 				token: requireToken(data.asset_code).sac,
 				contributionAmount: data.contribution_amount,
-				cycleLengthDays: cycleDaysFor(
+				cycleLengthSeconds: cycleSecondsFor(
 					data.contribution_frequency,
-					data.cycle_length_days,
+					data.cycle_length_seconds,
 				),
 				feeBps: data.fee_bps ?? 0,
 				lateFeeBps: data.late_fee_bps ?? 0,

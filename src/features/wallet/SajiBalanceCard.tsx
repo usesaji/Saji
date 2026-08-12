@@ -8,14 +8,14 @@ import type { SajiBalance } from "../../lib/hooks/useSajiBalance";
 import { formatStroops } from "../../lib/stroops";
 
 /**
- * "Saji Balance" — the money the user can actually withdraw right now.
+ * "Saji Balance" — payouts a circle has earmarked for this member and that are
+ * still escrowed, per asset. Never summed across assets (XLM + USDC is not a
+ * number).
  *
- * Split per asset into two buckets, never summed across assets (XLM + USDC is
- * not a number). The claimable/wallet split is shown because the two behave
- * differently: claimable is escrowed in a circle and costs a wallet signature
- * per circle to release, wallet funds are already the user's. Crucially, a
- * partial withdrawal moves the remainder from the first bucket to the second —
- * without the split that looks like the balance moved on its own.
+ * ESCROW ONLY. This used to add the user's own wallet balance on top, which is
+ * what let the Withdraw screen send their own funds and show the balance going
+ * DOWN. Money already in the wallet is theirs and is Freighter's business;
+ * Saji's job here is what is still held by the contract.
  */
 export default function SajiBalanceCard({
 	balance,
@@ -81,50 +81,51 @@ export default function SajiBalanceCard({
 									</span>
 								</p>
 
+								{/* Which circles it came from. Each is released separately,
+								    so this doubles as the signature count. */}
 								<div className="mt-2 space-y-1 text-xs md:text-sm">
-									{a.claimable_total > 0n && (
-										<div className="flex items-baseline justify-between gap-3">
-											<span className="text-muted-foreground">
-												Ready to claim
-												{a.claimables.length > 0 && (
-													<span className="ml-1 font-light">
-														· from{" "}
-														{a.claimables
-															.map((c) => c.group_name)
-															.join(", ")}
-													</span>
-												)}
+									{a.claimables.map((c) => (
+										<div
+											key={c.onchain_group_id}
+											className="flex items-baseline justify-between gap-3"
+										>
+											<span className="truncate text-muted-foreground">
+												{c.group_name}
 											</span>
 											<span className="shrink-0 font-medium">
-												{fmt(a.claimable_total)}
+												{fmt(c.amount)}
 											</span>
 										</div>
-									)}
-									{a.wallet_total > 0n && (
-										<div className="flex items-baseline justify-between gap-3">
-											<span className="text-muted-foreground">
-												Claimed
-												<span className="ml-1 font-light">· ready to send</span>
-											</span>
-											<span className="shrink-0 font-medium">
-												{fmt(a.wallet_total)}
-											</span>
-										</div>
-									)}
+									))}
 								</div>
 							</div>
 						))}
 					</div>
-
-					{hasWithdrawable && (
-						<Button
-							href={pageRoutes.dashboardRoutes.WITHDRAW}
-							className="mt-5 w-full md:w-auto"
-						>
-							Withdraw
-						</Button>
-					)}
 				</>
+			)}
+
+			{/* ALWAYS rendered once a wallet is linked, enabled or not.
+
+			    This used to live inside the "you have payouts" branch, so when
+			    nothing was claimable the button did not exist anywhere in the app —
+			    and since this card is the only Withdraw entry point, the answer to
+			    "where do I withdraw?" was genuinely nowhere. A disabled button with
+			    a reason is findable; a missing one is not. */}
+			{linked && !error && (
+				<div className="mt-5">
+					<Button
+						href={hasWithdrawable ? pageRoutes.dashboardRoutes.WITHDRAW : undefined}
+						disabled={!hasWithdrawable}
+						className="w-full md:w-auto"
+					>
+						Withdraw
+					</Button>
+					{!hasWithdrawable && !loading && (
+						<p className="mt-2 text-xs font-light text-muted-foreground">
+							Nothing to withdraw yet — a circle has to pay out to you first.
+						</p>
+					)}
+				</div>
 			)}
 		</section>
 	);

@@ -10,7 +10,11 @@ import { z } from "zod";
 import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { HttpError, handle, json, parseBody } from "@/server/http";
-import { assertOrganizer, findGroupOr404 } from "@/server/groups";
+import {
+	assertOrganizer,
+	describeConfigMismatch,
+	findGroupOr404,
+} from "@/server/groups";
 import { explorerUrl, getGroup } from "@/server/stellar/service";
 import type { OnchainGroup } from "@/server/stellar/service";
 import { reconcileAfterResponse } from "@/server/stellar/reconcile";
@@ -97,13 +101,40 @@ export async function PATCH(
 			if (!state.organizer) {
 				throw new HttpError(422, "That on-chain group does not exist.");
 			}
-			if (
-				user.stellarAddress &&
-				state.organizer !== user.stellarAddress
-			) {
+
+			// A caller with NO linked wallet used to skip the ownership check
+			// entirely (the condition was `user.stellarAddress && ...`), which let
+			// any authenticated user claim any unclaimed on-chain group id —
+			// including one created by somebody else's wallet. There is nothing to
+			// compare against, so the only safe answer is to refuse.
+			if (!user.stellarAddress) {
+				throw new HttpError(
+					422,
+					"Link your wallet before connecting this circle to the chain.",
+				);
+			}
+
+			if (state.organizer !== user.stellarAddress) {
 				throw new HttpError(
 					403,
 					"That on-chain group belongs to a different wallet.",
+				);
+			}
+
+			// The displayed terms and the ENFORCED terms are written by two
+			// independent calls — `POST /api/groups` (this DB row, which the join
+			// preview serves) and `create_group` (the contract). Nothing used to
+			// compare them, so an organizer could advertise "monthly, 2% late fee"
+			// while the contract enforced a 1-second cycle with a 100% late fee,
+			// and members joining off the invite link would never see it.
+			const mismatches = describeConfigMismatch(group, state);
+			if (mismatches.length > 0) {
+				throw new HttpError(
+					422,
+					"The on-chain group's terms do not match this circle: " +
+						`${mismatches.join("; ")}. ` +
+						"Members are shown this circle's terms, so it can only be linked " +
+						"to a contract group that enforces them.",
 				);
 			}
 		}
@@ -128,7 +159,20 @@ export async function PATCH(
 						userId: user.id,
 						type: "create_group",
 						stellarTxHash: data.tx_hash,
-						status: "success",
+						// PENDING, not "success" — the chain decides that, never the
+						// client. This hash arrives in a request body and nothing here
+						// verifies it, so writing "success" published a permanent
+						// "Group Created — Completed" row (with an explorer link) on
+						// the caller's unchecked say-so, for a hash that may have
+						// failed or never existed.
+						//
+						// `finalizePendingTransactions` only ever inspects rows that
+						// are `pending` with a non-null hash, so a row written
+						// "success" was never reconciled against reality. Writing it
+						// pending hands it to that finalizer, which flips it to
+						// success/failed from the network's own answer — and
+						// `reconcileAfterResponse` below runs it moments later.
+						status: "pending",
 						explorerUrl: explorerUrl(data.tx_hash),
 					},
 				})

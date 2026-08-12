@@ -5,7 +5,6 @@ import { dashboard as dashboardApi } from "../../../lib/api";
 import SavingsSummaryCard from "../../../features/overview/SavingsSummaryCard";
 import LinkWalletPrompt from "../../../features/wallet/LinkWalletPrompt";
 import MyActiveGroups from "../../../features/overview/MyActiveGroups";
-import DiscoverChallenges from "../../../features/overview/DiscoverChallenges";
 import RecentActivities from "../../../features/overview/RecentActivities";
 import ExploreCommunities from "../../../features/overview/ExploreCommunities";
 
@@ -35,7 +34,6 @@ export default function Page() {
 					<SavingsSummaryCard data={data} />
 					<LinkWalletPrompt />
 					<MyActiveGroups circles={data.circles} />
-					<DiscoverChallenges />
 					<RecentActivities />
 					<ExploreCommunities />
 				</>

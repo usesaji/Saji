@@ -2,7 +2,7 @@
 
 import { useCallback } from "react";
 import { currentAddress } from "../wallet";
-import { challengeClient } from "../contract/client";
+import { CALL_OPTIONS, challengeClient } from "../contract/client";
 
 /**
  * Direct on-chain actions against the Saji challenge contract, signed by the
@@ -52,7 +52,7 @@ export function useChallengeContract() {
 				member,
 				token,
 				amount,
-			});
+			}, CALL_OPTIONS);
 			const sent = await tx.signAndSend();
 			const result = sent.result;
 			if (result && "unwrap" in result) result.unwrap(); // throws on Err
@@ -92,7 +92,7 @@ export function useChallengeContract() {
 				member,
 				to: to ?? member,
 				amount,
-			});
+			}, CALL_OPTIONS);
 			const sent = await tx.signAndSend();
 			const result = sent.result;
 			if (result && "unwrap" in result) return result.unwrap();
@@ -146,11 +146,18 @@ export function useChallengeContract() {
 	const tokenOf = useCallback(
 		async (challengeId: bigint | number): Promise<string | null> => {
 			try {
-				const addr = (await currentAddress()) ?? undefined;
-				const client = challengeClient(
-					addr ?? "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF5",
-				);
-				const tx = await client.token_of({ challenge_id: BigInt(challengeId) });
+				const addr = await currentAddress();
+				// The token is now keyed per (challenge, MEMBER), not per challenge:
+				// a challenge-wide key let anyone pin an unborn challenge to a junk
+				// token for one stroop. Without a connected wallet there is no
+				// member to ask about, so there is no answer to give.
+				if (!addr) return null;
+
+				const client = challengeClient(addr);
+				const tx = await client.token_of({
+					challenge_id: BigInt(challengeId),
+					member: addr,
+				});
 				return (tx.result as string | undefined) ?? null;
 			} catch {
 				return null;

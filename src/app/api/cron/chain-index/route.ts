@@ -11,6 +11,7 @@
  */
 
 import { runIndexer } from "@/server/stellar/indexer";
+import { sweepExpired } from "@/server/oauth";
 import { safeEqual } from "@/server/auth";
 import { handle, json } from "@/server/http";
 
@@ -65,11 +66,33 @@ export async function GET(request: Request) {
 		const started = Date.now();
 		const summary = await runIndexer();
 
-		console.info("[cron] chain-index", {
-			...summary,
-			ms: Date.now() - started,
+		// Housekeeping for the two tables that accumulate short-lived rows.
+		// Neither had a cleaner: `oauth_handoffs` rows that are never redeemed
+		// (user closes the tab, network drops) stayed forever, and the shared
+		// rate-limit buckets would grow one row per key indefinitely. Both are
+		// best-effort — a failed sweep must not fail the reconcile sweep.
+		const swept = await sweepExpired().catch((error) => {
+			console.warn("[cron] expired-row sweep failed:", error);
+			return { expired_handoffs_swept: 0, expired_rate_limits_swept: 0 };
 		});
 
-		return json(summary);
+		const ms = Date.now() - started;
+
+		// Escalate above info level when reads are failing. In steady state
+		// `read_failures` is 0; a nonzero value means contract reads are being
+		// swallowed somewhere, and because this indexer skips rather than throws,
+		// that is otherwise indistinguishable from having no work to do. This log
+		// line is the intended hook for an alert.
+		if (summary.read_failures > 0) {
+			console.error("[cron] chain-index DEGRADED — contract reads failing", {
+				...summary,
+				...swept,
+				ms,
+			});
+		} else {
+			console.info("[cron] chain-index", { ...summary, ...swept, ms });
+		}
+
+		return json({ ...summary, ...swept });
 	});
 }

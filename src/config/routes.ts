@@ -14,7 +14,6 @@ export const pageRoutes = {
 		NEW_GROUP: "/groups/create",
 		GROUP: (id: string) => `/groups/${id}`,
 		CIRCLE: (id: string | number) => `/groups/${id}/circle`,
-		CHALLENGE: (id: string | number) => `/groups/${id}/challenge`,
 		GROUP_REQUESTS: (id: string | number) => `/groups/${id}/requests`,
 		PAYOUT_ORDER: (id: string | number) => `/groups/${id}/payout-order`,
 		GROUP_COMPLETE: (id: string | number) => `/groups/${id}/complete`,

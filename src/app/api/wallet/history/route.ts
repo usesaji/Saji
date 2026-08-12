@@ -11,6 +11,7 @@ import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json, parseQuery } from "@/server/http";
 import { serializeTransaction } from "@/server/serializers";
+import { resolveSubjectAmounts, transactionLabel } from "@/server/subjects";
 
 const schema = z.object({
 	per_page: z.coerce.number().int().min(1).max(100).default(20),
@@ -35,8 +36,18 @@ export async function GET(request: Request) {
 			}),
 		]);
 
+		// The amount and the DIRECTION, neither of which is on the row itself.
+		// Without these the wallet history listed every withdrawal as "payout"
+		// with no figure — indistinguishable from money arriving.
+		const amounts = await resolveSubjectAmounts(data);
+
 		return json({
-			data: data.map((tx) => ({ ...serializeTransaction(tx), group: tx.group })),
+			data: data.map((tx) => ({
+				...serializeTransaction(tx),
+				group: tx.group,
+				kind: transactionLabel(tx),
+				amount: amounts.get(tx.id) ?? null,
+			})),
 			current_page: page,
 			per_page: perPage,
 			total,

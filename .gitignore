@@ -32,6 +32,11 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...except the template. `.env*` was swallowing it, so the one file that tells
+# a new developer (or a deploy) which variables exist was untracked — while
+# `.env.example` itself is referenced by the README and the runbook. It holds
+# names and placeholders only, never real values.
+!.env.example
 
 # vercel
 .vercel
@@ -45,3 +50,21 @@ next-env.d.ts
 
 # Uploaded user/group images
 /public/storage/
+
+# Documentation IS part of this repo.
+#
+# A global ignore on this machine (`core.excludesFile`, `*.md`) was silently
+# keeping RUNBOOK.md, HOW-IT-WORKS.md and src/server/ARCHITECTURE.md out of
+# version control — only README/AGENTS/CLAUDE.md had been force-added. That is
+# almost certainly why those three drifted so far from the code: a file that
+# cannot appear in a diff never gets reviewed alongside the change that
+# invalidates it.
+#
+# A repo-level .gitignore takes precedence over core.excludesFile, so this
+# re-includes them here without touching the machine-wide config (which is a
+# reasonable default for scratch directories — just not for a repo whose
+# architecture notes are the authority on how the backend works).
+#
+# node_modules is excluded above, and git does not descend into an ignored
+# directory, so this does not pull in dependency documentation.
+!*.md

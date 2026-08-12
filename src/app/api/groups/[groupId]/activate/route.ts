@@ -35,13 +35,18 @@ export async function POST(
 				// waitForPayouts=false: this route's job is reflecting the group's
 				// own activation status back quickly, not settling someone else's
 				// payout inline — that would add up to ~9s of on-ledger
-				// confirmation polling to every activate click. The cron sweep and
-				// reconcileAfterResponse below still cover it shortly after.
+				// confirmation polling to every activate click.
 				await runIndexer(group.id, false);
 			} catch (error) {
 				console.warn("[groups] inline activate reconcile failed:", error);
-				reconcileAfterResponse(group.id);
 			}
+
+			// ALWAYS, not only on failure — same defect as the contribute-confirm
+			// route. `runIndexer(id, false)` skips `triggerPayoutIfReady`, so
+			// scheduling this only in the `catch` left any cycle that became
+			// payable here unsettled until the daily sweep. Idempotent, and runs
+			// after the response is flushed.
+			reconcileAfterResponse(group.id);
 		}
 
 		const fresh = await prisma.group.findUnique({ where: { id: group.id } });

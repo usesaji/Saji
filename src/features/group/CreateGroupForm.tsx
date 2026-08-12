@@ -34,18 +34,30 @@ import { pageRoutes } from "../../config/routes";
 import { toast } from "../../lib/utils/toast";
 import { useSavingsContract } from "../../lib/hooks/useSavingsContract";
 import { TOKEN_LIST, requireToken } from "../../lib/contract/tokens";
-import { cycleDaysFor, labelize } from "./group-view";
+import { cycleSecondsFor, labelize } from "./group-view";
 
 // ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------
 
 const FREQUENCIES = [
+	{ value: "hourly", label: "Hourly" },
+	{ value: "six_hourly", label: "Every 6 Hours" },
 	{ value: "daily", label: "Daily" },
+	{ value: "two_daily", label: "Every 2 Days" },
 	{ value: "weekly", label: "Weekly" },
 	{ value: "bi_weekly", label: "Bi-Weekly" },
 	{ value: "monthly", label: "Monthly" },
+	{ value: "quarterly", label: "Quarterly" },
+	{ value: "yearly", label: "Yearly" },
 	{ value: "custom", label: "Custom" },
+];
+
+/** Units for a custom cycle length. The contract accepts 1 hour to 1 year. */
+const CYCLE_UNITS = [
+	{ value: "3600", label: "Hours" },
+	{ value: "86400", label: "Days" },
+	{ value: "604800", label: "Weeks" },
 ];
 
 const GROUP_TYPES = [
@@ -70,7 +82,8 @@ type FormState = {
 	target_amount: string;
 	asset_code: string;
 	contribution_frequency: string;
-	cycle_length_days: string;
+	cycle_length_value: string;
+	cycle_length_unit: string;
 	payout_order: string;
 	group_type: string;
 	late_penalty: string;
@@ -91,7 +104,8 @@ const initial: FormState = {
 	target_amount: "",
 	asset_code: "USDC",
 	contribution_frequency: "monthly",
-	cycle_length_days: "",
+	cycle_length_value: "",
+	cycle_length_unit: "86400",
 	payout_order: "manual",
 	group_type: "private",
 	late_penalty: "deduct_from_balance",
@@ -263,7 +277,11 @@ export default function CreateGroupForm() {
 			auto_approve_join: form.auto_approve_join,
 			hide_balances: form.hide_balances,
 			...(form.contribution_frequency === "custom"
-				? { cycle_length_days: Number(form.cycle_length_days) || 1 }
+				? {
+						cycle_length_seconds:
+							(Number(form.cycle_length_value) || 1) *
+							Number(form.cycle_length_unit),
+					}
 				: {}),
 		};
 
@@ -275,9 +293,10 @@ export default function CreateGroupForm() {
 				const onchainId = await createGroupOnchain({
 					token: requireToken(form.asset_code).sac,
 					contributionAmount: form.contribution_amount,
-					cycleLengthDays: cycleDaysFor(
+					cycleLengthSeconds: cycleSecondsFor(
 						form.contribution_frequency,
-						form.cycle_length_days,
+						(Number(form.cycle_length_value) || 1) *
+							Number(form.cycle_length_unit),
 					),
 					feeBps: payload.fee_bps ?? 0,
 					lateFeeBps: payload.late_fee_bps ?? 0,
@@ -627,15 +646,28 @@ export default function CreateGroupForm() {
 					onChange={setValue("contribution_frequency")}
 				/>
 				{form.contribution_frequency === "custom" && (
-					<InputField
-						name="cycle_length_days"
-						label="Cycle Length (days)"
-						type="number"
-						placeholder="7"
-						value={form.cycle_length_days}
-						onChange={set("cycle_length_days")}
-						error={errors.cycle_length_days}
-					/>
+					<div className="flex items-end gap-3">
+						<div className="flex-1">
+							<InputField
+								name="cycle_length_value"
+								label="Cycle Length"
+								type="number"
+								min={1}
+								placeholder="7"
+								value={form.cycle_length_value}
+								onChange={set("cycle_length_value")}
+								error={errors.cycle_length_seconds}
+							/>
+						</div>
+						<div className="w-36">
+							<SelectField
+								label="Unit"
+								value={form.cycle_length_unit}
+								items={CYCLE_UNITS}
+								onChange={setValue("cycle_length_unit")}
+							/>
+						</div>
+					</div>
 				)}
 				<SelectField
 					label="Group Type"

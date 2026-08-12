@@ -12,6 +12,7 @@
 
 import { z } from "zod";
 import { HttpError, handle, json, parseBody } from "@/server/http";
+import { createToken } from "@/server/auth";
 import { redeemHandoffCode } from "@/server/oauth";
 
 const schema = z.object({
@@ -22,14 +23,15 @@ export async function POST(request: Request) {
 	return handle(async () => {
 		const data = await parseBody(request, schema);
 
-		const token = await redeemHandoffCode(data.code);
-		if (!token) {
+		const userId = await redeemHandoffCode(data.code);
+		if (!userId) {
 			throw new HttpError(
 				400,
 				"That sign-in link has expired or was already used. Please sign in again.",
 			);
 		}
 
-		return json({ token });
+		// Minted only now that the code has been proven valid and single-use.
+		return json({ token: await createToken(userId, "google") });
 	});
 }

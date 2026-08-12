@@ -42,7 +42,7 @@ export async function POST(request: Request) {
 		// Keyed by user, not IP: a stolen bearer token is what's actually being
 		// brute-forced against `current_password` here, and that threat doesn't
 		// need to come from one IP. Same budget as login's per-IP limit.
-		rateLimit(`profile-password:${user.id}`, 6, 60);
+		await rateLimit(`profile-password:${user.id}`, 6, 60);
 
 		const data = await parseBody(request, schema);
 

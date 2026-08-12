@@ -36,15 +36,68 @@ import {
 // means users transacting worthless assets while the UI calls them dollars.
 // ---------------------------------------------------------------------------
 
-export const IS_MAINNET = process.env.STELLAR_NETWORK === "public";
+/**
+ * Every value below has a `NEXT_PUBLIC_` twin that the browser reads from
+ * `src/lib/stellar-network.ts`. Both files used to claim, in their own opening
+ * comment, to be the single place that decides — which meant four values
+ * configured twice, under two names, with nothing checking that they agreed.
+ *
+ * They are the same process now (the API is route handlers in this app, not a
+ * separate Laravel deployment), and none of these values is a secret, so the
+ * public twin is the authority and the server-only name is an optional
+ * override. `agree()` turns the drift that used to be a silent, hour-long
+ * debugging session — the browser signing against a contract that holds no
+ * groups, surfacing as `#1 GroupNotFound` — into a refusal to start.
+ */
+function agree(
+	serverName: string,
+	publicName: string,
+	/**
+	 * The network selector alone is compared case-insensitively: the two halves
+	 * of the codebase spell it differently by existing convention
+	 * (`STELLAR_NETWORK=testnet`, `NEXT_PUBLIC_STELLAR_NETWORK=TESTNET`) and both
+	 * are read through their own case-normalising comparison. Contract ids and
+	 * URLs are compared exactly — for those, any difference is a real one.
+	 */
+	ignoreCase = false,
+): string {
+	const serverValue = (process.env[serverName] ?? "").trim();
+	const publicValue = (process.env[publicName] ?? "").trim();
 
-function required(name: string, testnetFallback: string): string {
-	const value = process.env[name] ?? "";
+	const differs = ignoreCase
+		? serverValue.toLowerCase() !== publicValue.toLowerCase()
+		: serverValue !== publicValue;
+
+	if (serverValue && publicValue && differs) {
+		throw new Error(
+			`${serverName} and ${publicName} disagree (${serverValue} vs ${publicValue}). ` +
+				`These must name the same network/contract: the browser signs against the ` +
+				`public value and the server reads the other, so a mismatch means writes and ` +
+				`reads land in different places. Unset one of them.`,
+		);
+	}
+
+	return serverValue || publicValue;
+}
+
+export const IS_MAINNET =
+	agree(
+		"STELLAR_NETWORK",
+		"NEXT_PUBLIC_STELLAR_NETWORK",
+		true,
+	).toLowerCase() === "public";
+
+function required(
+	serverName: string,
+	publicName: string,
+	testnetFallback: string,
+): string {
+	const value = agree(serverName, publicName);
 	if (value) return value;
 	if (IS_MAINNET) {
 		throw new Error(
-			`${name} must be set when STELLAR_NETWORK=public. ` +
-				`Refusing to fall back to a testnet value on mainnet.`,
+			`${serverName} (or ${publicName}) must be set on mainnet. ` +
+				`Refusing to fall back to a testnet value.`,
 		);
 	}
 	return testnetFallback;
@@ -56,19 +109,24 @@ export const NETWORK_PASSPHRASE = IS_MAINNET
 
 export const RPC_URL = required(
 	"STELLAR_RPC_URL",
+	"NEXT_PUBLIC_SOROBAN_RPC_URL",
 	"https://soroban-testnet.stellar.org",
 );
 
-export const CONTRACT_ID = process.env.STELLAR_CONTRACT_ID ?? "";
+export const CONTRACT_ID = agree(
+	"STELLAR_CONTRACT_ID",
+	"NEXT_PUBLIC_SAVINGS_CONTRACT_ID",
+);
 
 /**
- * The deployed challenge (public savings) contract — server-side twin of
- * `NEXT_PUBLIC_CHALLENGE_CONTRACT_ID`. A SEPARATE contract from `CONTRACT_ID`
- * (savings/rotating circles): each contract has one token balance, so this
- * must never be conflated with the savings contract id.
+ * The deployed challenge (public savings) contract. A SEPARATE contract from
+ * `CONTRACT_ID` (savings/rotating circles): each contract has one token
+ * balance, so this must never be conflated with the savings contract id.
  */
-export const CHALLENGE_CONTRACT_ID =
-	process.env.STELLAR_CHALLENGE_CONTRACT_ID ?? "";
+export const CHALLENGE_CONTRACT_ID = agree(
+	"STELLAR_CHALLENGE_CONTRACT_ID",
+	"NEXT_PUBLIC_CHALLENGE_CONTRACT_ID",
+);
 
 /**
  * A funded account used only as the source for read simulations. Reads never
@@ -195,37 +253,21 @@ async function simulate<T>(
 	return scValToNative(sim.result.retval) as T;
 }
 
-/**
- * Build an UNSIGNED, simulation-prepared transaction and return base64 XDR.
- *
- * This is the non-custodial path: the user's wallet signs client-side and
- * submits. The equivalent of the CLI's `--build-only`, minus the subprocess.
- */
-async function buildUnsigned(
-	sourceAccount: string,
-	method: string,
-	args: xdr.ScVal[],
-	contractId = CONTRACT_ID,
-): Promise<string> {
-	assertConfigured();
-
-	const account = await server.getAccount(sourceAccount);
-	const contract = new Contract(contractId);
-
-	const tx = new TransactionBuilder(account, {
-		fee: "1000000",
-		networkPassphrase: NETWORK_PASSPHRASE,
-	})
-		.addOperation(contract.call(method, ...args))
-		.setTimeout(300)
-		.build();
-
-	// `prepareTransaction` simulates and folds in the Soroban resource
-	// footprint and fees. Without it the wallet signs a tx the network rejects.
-	const prepared = await server.prepareTransaction(tx);
-
-	return prepared.toXDR();
-}
+// NOTE: this module used to also export a set of unsigned-XDR builders
+// (`buildCreateGroupTx`, `buildContributeTx`, `buildJoinGroupTx`,
+// `buildSetPayoutOrderTx`, `buildStartCycleTx`, `buildWithdrawTx`) plus a
+// `submitSignedXdr` relay, backed by a shared `buildUnsigned` helper.
+//
+// They are gone deliberately. The browser builds and signs every one of those
+// calls itself through the generated bindings in `src/lib/contract/*`, and
+// nothing ever read the XDR these produced — the routes paid two RPC round
+// trips per request to compute a string the client discarded. Being a second,
+// unexercised encoding of the same contract interface, they had also drifted
+// (create_group passed days/hours as u32 where the contract takes seconds as
+// u64), which is precisely the failure mode that a duplicate interface invites.
+//
+// If a server-built XDR path is ever genuinely needed, add it back with a test
+// that exercises it — an unexercised builder is worse than no builder.
 
 // ---------------------------------------------------------------------------
 // Argument builders — keep ScVal type choices in one place.
@@ -240,9 +282,12 @@ const u64 = (value: number | bigint) =>
 
 const u32 = (value: number) => nativeToScVal(value, { type: "u32" });
 
-const i128 = (value: bigint) => nativeToScVal(value, { type: "i128" });
-
 const addr = (value: string) => new Address(value).toScVal();
+
+// There was an `i128` helper here too. It is gone with the unsigned-tx builders
+// that were its only callers — no read this module performs takes an i128.
+// `scripts/check-call-sites.mjs` still knows the mapping, so restoring it (for a
+// `deposit`/`transfer`-shaped call) needs no change there.
 
 // ---------------------------------------------------------------------------
 // Reads — dashboard and indexer
@@ -254,27 +299,68 @@ export async function getPool(groupId: number | bigint): Promise<bigint> {
 }
 
 /** The full on-chain group record. Shape follows the contract's Group struct. */
-export async function getGroup(groupId: number | bigint): Promise<OnchainGroup> {
+export async function getGroup(
+	groupId: number | bigint,
+): Promise<OnchainGroup> {
 	return simulate<OnchainGroup>("get_group", [u64(groupId)]);
 }
 
+/**
+ * The group's current cycle index.
+ *
+ * Lives under its own storage key, NOT on `GroupConfig` — so it can only be
+ * read here. Reading it off the group struct (which has no such field) is what
+ * pinned every group to cycle 0.
+ */
+export async function getCycle(groupId: number | bigint): Promise<number> {
+	return Number(await simulate<number>("get_cycle", [u64(groupId)]));
+}
+
 /** Member addresses, in rotation order. */
-export async function getMembers(
-	groupId: number | bigint,
-): Promise<string[]> {
+export async function getMembers(groupId: number | bigint): Promise<string[]> {
 	return simulate<string[]>("get_members", [u64(groupId)]);
 }
 
-/** Whether `member` has paid for `cycle`. */
+/**
+ * Ledger timestamp (SECONDS) at which the current cycle's deposits opened.
+ *
+ * The contract's `CycleStart`. Adding `cycle_length` to it gives when the cycle
+ * is due — which is what `groups.next_payout_at` is, and the basis the contract
+ * itself measures lateness from in `resolve_default`.
+ *
+ * Worth knowing: a cycle can PAY OUT well before this window elapses (as soon
+ * as everyone has paid), so this is the schedule, not a prediction of when the
+ * money moves. See the deposit-window comment in the contract's `contribute`.
+ */
+export async function depositsOpenAt(
+	groupId: number | bigint,
+): Promise<number> {
+	return Number(await simulate<bigint>("deposits_open_at", [u64(groupId)]));
+}
+
+/**
+ * Whether `member` has paid for `cycle`.
+ *
+ * ARGUMENT ORDER IS LOAD-BEARING, and this is the one place it is easy to get
+ * wrong: the contract reads `(group_id, cycle, member)` — cycle BEFORE member —
+ * and Soroban resolves arguments positionally, so a swap is not a type error in
+ * TypeScript but fails at simulation on every call. The parameters here are
+ * ordered to match the contract exactly so the two can be compared by eye.
+ *
+ * The Laravel original passed NAMED arguments through the CLI, which made order
+ * irrelevant; nothing about the positional ScVal form preserves that, so the
+ * only guard is `scripts/check-contract-bindings.mjs`, which now compares
+ * argument types positionally as well as counting them.
+ */
 export async function hasContributed(
 	groupId: number | bigint,
-	member: string,
 	cycle: number,
+	member: string,
 ): Promise<boolean> {
 	return simulate<boolean>("has_contributed", [
 		u64(groupId),
-		addr(member),
 		u32(cycle),
+		addr(member),
 	]);
 }
 
@@ -387,8 +473,8 @@ export function tokenSacs(): Record<string, string> {
 	};
 
 	return Object.fromEntries(
-		Object.entries(configured).filter(
-			(entry): entry is [string, string] => Boolean(entry[1]),
+		Object.entries(configured).filter((entry): entry is [string, string] =>
+			Boolean(entry[1]),
 		),
 	);
 }
@@ -406,115 +492,86 @@ export async function getTransactionStatus(hash: string): Promise<string> {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Unsigned transaction builders — the user's wallet signs these
-// ---------------------------------------------------------------------------
-
-export interface CreateGroupParams {
-	organizer: string;
-	token: string;
-	contributionAmount: bigint;
-	cycleLengthDays: number;
-	feeBps: number;
-	lateFeeBps: number;
-	gracePeriodHours: number;
-	payoutOrder: number;
-	latePenalty: number;
-}
-
-/** Unsigned `create_group`, for the organizer's wallet to sign. */
-export async function buildCreateGroupTx(
-	params: CreateGroupParams,
-): Promise<string> {
-	return buildUnsigned(params.organizer, "create_group", [
-		addr(params.organizer),
-		addr(params.token),
-		i128(params.contributionAmount),
-		u32(params.cycleLengthDays),
-		u32(params.feeBps),
-		u32(params.lateFeeBps),
-		u32(params.gracePeriodHours),
-		u32(params.payoutOrder),
-		u32(params.latePenalty),
-	]);
+/** What the contract's `payout` event reports for one settled cycle. */
+export interface PayoutEvent {
+	cycle: number;
+	recipient: string;
+	/** The whole pool that was settled, in stroops. */
+	gross: bigint;
+	/** Service fee + late fee, forwarded to the organizer, in stroops. */
+	fee: bigint;
+	/** Recorded as the recipient's claimable balance, in stroops. */
+	net: bigint;
 }
 
 /**
- * Unsigned `join_group` — admits `member` to a group.
+ * Read the `payout` event a `trigger_payout` transaction emitted.
  *
- * The ORGANIZER signs this, not the member: admitting someone is the
- * organizer's authority, and the member being admitted is a separate argument.
- * Passing the member as the source account would build a transaction the
- * contract rejects.
- */
-export async function buildJoinGroupTx(
-	organizer: string,
-	groupId: number | bigint,
-	member: string,
-): Promise<string> {
-	return buildUnsigned(organizer, "join_group", [u64(groupId), addr(member)]);
-}
-
-/**
- * Unsigned `start_cycle` — locks the rotation and starts cycle 0.
- * Organizer signs.
- */
-export async function buildStartCycleTx(
-	organizer: string,
-	groupId: number | bigint,
-): Promise<string> {
-	return buildUnsigned(organizer, "start_cycle", [u64(groupId)]);
-}
-
-/**
- * Unsigned `set_payout_order` — freezes the rotation order on-chain.
- * Organizer signs.
- */
-export async function buildSetPayoutOrderTx(
-	organizer: string,
-	groupId: number | bigint,
-	members: string[],
-): Promise<string> {
-	return buildUnsigned(organizer, "set_payout_order", [
-		u64(groupId),
-		nativeToScVal(members.map((m) => new Address(m))),
-	]);
-}
-
-/** Unsigned `contribute`, for the contributing member's wallet to sign. */
-export async function buildContributeTx(
-	member: string,
-	groupId: number | bigint,
-): Promise<string> {
-	return buildUnsigned(member, "contribute", [u64(groupId), addr(member)]);
-}
-
-/**
- * Unsigned token transfer — the Wallet "Withdraw" action.
+ * WHY THIS EXISTS. The indexer used to derive the recorded figures by reading
+ * `get_pool` and `claimable_of` BEFORE calling `trigger_payout` and diffing
+ * against a read taken after. Nothing serialises reconcile passes — `after()`,
+ * two inline `runIndexer` call sites and the cron sweep can all touch one group
+ * at once — so a second pass could capture its "before" values, watch the first
+ * pass's payout land, and then compute `gross`/`fee` against a pool a different
+ * pass had already consumed. The DB unique on (group_id, cycle) prevents a
+ * DUPLICATE row; it does nothing about one row with the wrong numbers, written
+ * `status: "confirmed"` and never revisited.
  *
- * A withdrawal is a plain token transfer against the TOKEN contract, so no
- * savings-contract id is needed. The backend only assembles it; the user's
- * wallet signs and submits.
+ * The event carries `(cycle, recipient, pool, fee, net)` and is emitted inside
+ * the payout itself, so it describes exactly the settlement this hash performed
+ * — no before-state, nothing to race against. Concurrent passes now converge
+ * instead of interleaving.
+ *
+ * Returns null if the transaction has no payout event (not yet applied, failed,
+ * or not a payout).
  */
-export async function buildWithdrawTx(
-	from: string,
-	to: string,
-	amount: bigint,
-	token = process.env.STELLAR_USDC_SAC ?? "",
-): Promise<string> {
-	if (!token) {
-		throw new Error("No token address configured for withdrawal.");
-	}
-	if (amount <= 0n) {
-		throw new Error("Withdrawal amount must be positive.");
+export async function getPayoutEvent(hash: string): Promise<PayoutEvent | null> {
+	let tx;
+	try {
+		tx = await server.getTransaction(hash);
+	} catch {
+		return null;
 	}
 
-	return buildUnsigned(
-		from,
-		"transfer",
-		[addr(from), addr(to), i128(amount)],
-		token,
-	);
+	if (tx.status !== "SUCCESS" || !tx.resultMetaXdr) return null;
+
+	const soroban = tx.resultMetaXdr.v3?.()?.sorobanMeta?.();
+	if (!soroban) return null;
+
+	for (const event of soroban.events()) {
+		const body = event.body().v0();
+		const topics = body.topics();
+		if (topics.length < 1) continue;
+
+		// Topic 0 is the event name symbol; the contract publishes "payout".
+		let name: unknown;
+		try {
+			name = scValToNative(topics[0]);
+		} catch {
+			continue;
+		}
+		if (name !== "payout") continue;
+
+		let data: unknown;
+		try {
+			data = scValToNative(body.data());
+		} catch {
+			continue;
+		}
+
+		// Published as the tuple (cycle, recipient, pool, fee, net).
+		if (!Array.isArray(data) || data.length < 5) continue;
+
+		return {
+			cycle: Number(data[0]),
+			recipient: String(data[1]),
+			gross: BigInt(data[2]),
+			fee: BigInt(data[3]),
+			net: BigInt(data[4]),
+		};
+	}
+
+	return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -532,9 +589,7 @@ export async function buildWithdrawTx(
  *
  * Returns the submitted transaction hash.
  */
-export async function triggerPayout(
-	groupId: number | bigint,
-): Promise<string> {
+export async function triggerPayout(groupId: number | bigint): Promise<string> {
 	assertConfigured();
 
 	const secret = process.env.STELLAR_SERVICE_SECRET ?? "";
@@ -570,25 +625,6 @@ export async function triggerPayout(
 	return sent.hash;
 }
 
-/**
- * Submit an already-signed transaction envelope and return its hash.
- *
- * Used by the routes that accept signed XDR back from the frontend. The
- * envelope is signed by the USER's wallet — this only relays it.
- */
-export async function submitSignedXdr(signedXdr: string): Promise<string> {
-	const tx = TransactionBuilder.fromXDR(signedXdr, NETWORK_PASSPHRASE);
-	const sent = await server.sendTransaction(tx);
-
-	if (sent.status === "ERROR") {
-		throw new Error(
-			`Transaction submission failed: ${JSON.stringify(sent.errorResult)}`,
-		);
-	}
-
-	return sent.hash;
-}
-
 /** Explorer link for a tx hash, matching the network in use. */
 export function explorerUrl(hash: string): string {
 	const network = IS_MAINNET ? "public" : "testnet";
@@ -600,15 +636,41 @@ export function explorerUrl(hash: string): string {
 // ---------------------------------------------------------------------------
 
 /** The contract's Group struct, as decoded by `scValToNative`. */
+/**
+ * The contract's `GroupConfig` struct, exactly as `scValToNative` decodes it.
+ *
+ * THESE FIELD NAMES ARE THE CONTRACT'S, NOT THE DATABASE'S. An earlier version
+ * of this interface described the DB serializer's shape instead
+ * (`contribution_amount`, `cycle_length_days`, `current_cycle`, `members`,
+ * `next_recipient`, `next_payout_at`). None of those exist on `GroupConfig`, so
+ * every read of them was `undefined` — and because the consumers used
+ * `?? 0`/`?? []` fallbacks, the reconciler silently treated every group as
+ * "cycle 0, no members" forever instead of failing. Verified against the
+ * deployed contract with `stellar contract info interface`.
+ *
+ * What genuinely is NOT here, and where to get it instead:
+ *   - the current cycle     → `getCycle()`      (DataKey::Cycle)
+ *   - the member roster     → `getMembers()`    (DataKey::Members)
+ *   - the next recipient    → `nextRecipient()` (computed by scan, not index)
+ *   - a next-payout time    → does not exist; the contract pays on "everyone
+ *     has paid", never on elapsed time.
+ */
 export interface OnchainGroup {
 	organizer: string;
 	token: string;
-	contribution_amount: bigint;
-	cycle_length_days: number;
+	/** Per-cycle contribution, in stroops. */
+	amount: bigint;
+	/** Cycle length in SECONDS (not days). */
+	cycle_length: bigint;
 	fee_bps: number;
-	current_cycle: number;
+	late_fee_bps: number;
+	/** Grace period in SECONDS (not hours). */
+	grace_period: bigint;
+	/** `PayoutOrder` ordinal: 0 Manual, 1 Random, 2 Vote, 3 Custom. */
+	payout_order: number;
+	/** `LatePenalty` ordinal: 0 DeductFromBalance, 1 RemoveMember. */
+	late_penalty: number;
+	member_count: number;
+	/** `Status` ordinal: 0 Draft, 1 Open, 2 Active, 3 Completed. */
 	status: number;
-	members: string[];
-	next_recipient?: string;
-	next_payout_at?: bigint;
 }

@@ -11,6 +11,7 @@ import { z } from "zod";
 import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json, parseBody, validationError } from "@/server/http";
+import { publicFileUrl } from "@/server/storage";
 
 /** The Profile header + linked wallet reference. */
 export async function GET(request: Request) {
@@ -22,7 +23,7 @@ export async function GET(request: Request) {
 			name: user.name,
 			tag_name: user.tagName,
 			email: user.email,
-			avatar_url: user.avatarUrl,
+			avatar_url: publicFileUrl(user.avatarUrl),
 			stellar_address: user.stellarAddress,
 			date_of_birth: user.dateOfBirth?.toISOString().slice(0, 10) ?? null,
 			gender: user.gender,
@@ -102,7 +103,7 @@ export async function PATCH(request: Request) {
 			name: updated.name,
 			tag_name: updated.tagName,
 			email: updated.email,
-			avatar_url: updated.avatarUrl,
+			avatar_url: publicFileUrl(updated.avatarUrl),
 			stellar_address: updated.stellarAddress,
 			date_of_birth: updated.dateOfBirth?.toISOString().slice(0, 10) ?? null,
 			gender: updated.gender,

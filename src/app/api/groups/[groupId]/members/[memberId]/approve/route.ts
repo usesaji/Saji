@@ -8,8 +8,8 @@ import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json, notFound } from "@/server/http";
 import { assertOrganizer, findGroupOr404, parseBigInt } from "@/server/groups";
-import { buildJoinGroupTx } from "@/server/stellar/service";
 import { serializeMember } from "@/server/serializers";
+import { emitAfterResponse } from "@/server/notifications";
 
 export async function POST(
 	request: Request,
@@ -53,30 +53,24 @@ export async function POST(
 			},
 		});
 
+		// The approval is the completed action — tell the member now, after the
+		// response is flushed. Keyed on the membership row, so an organizer
+		// re-approving cannot send a second email.
+		emitAfterResponse({
+			userId: member.userId,
+			type: "join_approved",
+			dedupeKey: `join_approved:${member.id}`,
+			title: `You're in — ${group.name}`,
+			body: `Your request to join "${group.name}" was approved. You'll be able to contribute once the organizer starts the cycle.`,
+			href: `/groups/${group.id}`,
+			meta: { group_id: String(group.id), group_name: group.name },
+		});
+
 		// Non-custodial: admitting a member on-chain is authorized by the
-		// ORGANIZER's wallet — they sign, and the member is an argument.
-		//
-		// Best-effort: the frontend admits on-chain directly via the contract
-		// bindings, so a build failure must not 500 the approval. The DB status
-		// change above has already succeeded and is the important part.
-		let unsignedXdr: string | null = null;
-
-		if (
-			user.stellarAddress &&
-			group.onchainGroupId !== null &&
-			existing.user.stellarAddress
-		) {
-			try {
-				unsignedXdr = await buildJoinGroupTx(
-					user.stellarAddress,
-					group.onchainGroupId,
-					existing.user.stellarAddress,
-				);
-			} catch (error) {
-				console.warn("[groups] could not build join_group XDR:", error);
-			}
-		}
-
-		return json({ member: serializeMember(member), unsigned_xdr: unsignedXdr });
+		// ORGANIZER's wallet — they sign, and the member is an argument. That
+		// happens in the browser via the contract bindings; this route records
+		// the approval off-chain. The unsigned join_group XDR built here
+		// previously had no consumer — see the note in `POST /api/groups`.
+		return json({ member: serializeMember(member) });
 	});
 }

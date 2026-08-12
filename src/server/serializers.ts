@@ -14,10 +14,12 @@ import type {
 	Contribution,
 	Group,
 	GroupMember,
+	Notification,
 	Transaction,
 	User,
 	WithdrawInfo,
 } from "@prisma/client";
+import { publicFileUrl } from "@/server/storage";
 
 export function publicUser(user: User) {
 	return {
@@ -26,7 +28,7 @@ export function publicUser(user: User) {
 		tag_name: user.tagName,
 		email: user.email,
 		email_verified_at: user.emailVerifiedAt,
-		avatar_url: user.avatarUrl,
+		avatar_url: publicFileUrl(user.avatarUrl),
 		stellar_address: user.stellarAddress,
 		date_of_birth: user.dateOfBirth,
 		gender: user.gender,
@@ -49,7 +51,7 @@ function publicUserRef(
 		id: user.id,
 		name: user.name,
 		tag_name: user.tagName,
-		avatar_url: user.avatarUrl,
+		avatar_url: publicFileUrl(user.avatarUrl),
 		stellar_address: user.stellarAddress,
 	};
 }
@@ -71,7 +73,7 @@ export function serializeGroup(group: Group) {
 		id: group.id,
 		name: group.name,
 		description: group.description,
-		photo_url: group.photoUrl,
+		photo_url: publicFileUrl(group.photoUrl),
 		organizer_id: group.organizerId,
 		onchain_group_id: group.onchainGroupId,
 		contract_address: group.contractAddress,
@@ -79,7 +81,7 @@ export function serializeGroup(group: Group) {
 		asset_issuer: group.assetIssuer,
 		contribution_amount: group.contributionAmount,
 		target_amount: group.targetAmount,
-		cycle_length_days: group.cycleLengthDays,
+		cycle_length_seconds: group.cycleLengthSeconds,
 		contribution_frequency: group.contributionFrequency,
 		fee_bps: group.feeBps,
 		late_fee_bps: group.lateFeeBps,
@@ -112,12 +114,64 @@ export function serializeGroup(group: Group) {
 /**
  * `serializeGroup` plus an attached `members_count`, matching Laravel's
  * `withCount('members')` naming on the list/dashboard endpoints.
+ *
+ * `progress` is optional so the callers that only need the count are unchanged.
+ * Where it IS supplied, the card can finally show real figures: it used to
+ * hardcode `current: 0`, so every card read "$0 / $0" with an empty progress bar
+ * no matter how much had actually been contributed.
  */
 export function serializeGroupWithCount(
 	group: Group,
 	membersCount: number,
+	progress?: {
+		youPaidTotal: string;
+		youPaidThisCycle: boolean;
+		approvedCount: number;
+		memberAvatars: { name: string; avatar_url: string | null }[];
+	},
 ) {
-	return { ...serializeGroup(group), members_count: membersCount };
+	const base = { ...serializeGroup(group), members_count: membersCount };
+	if (!progress) return base;
+
+	return {
+		...base,
+		approved_count: progress.approvedCount,
+		member_avatars: progress.memberAvatars.map((member) => ({
+			name: member.name,
+			avatar_url: publicFileUrl(member.avatar_url),
+		})),
+		/** The viewer's cumulative confirmed contributions, decimal string. */
+		you_paid_total: progress.youPaidTotal,
+		/** Whether the viewer has settled the CURRENT cycle. Drives the badge. */
+		you_paid_this_cycle: progress.youPaidThisCycle,
+		/** Cycles in a full rotation — one turn per approved member. */
+		total_cycles: progress.approvedCount,
+		/**
+		 * The viewer's commitment across the WHOLE rotation:
+		 * `contribution_amount × total_cycles`.
+		 *
+		 * Deliberately NOT `target_amount`: that is a nullable, user-entered
+		 * field, and being the card's only source is exactly why every card
+		 * rendered a `$0` denominator.
+		 *
+		 * NOTE, and it is visible in the UI: a member is EXEMPT from funding
+		 * their own payout (`RecipientExempt` in the savings contract), so they
+		 * actually pay in only `total_cycles − 1` times. A member who never
+		 * misses therefore tops out at `(n−1)/n` — 75% in a 4-person circle —
+		 * and the bar never reaches 100%. Multiplying by `approvedCount - 1`
+		 * instead makes it fill exactly; that is the one-line change.
+		 */
+		your_aim: rotationCommitment(group, progress.approvedCount),
+	};
+}
+
+/** What a member pays over a full rotation: contribution × total cycles. */
+function rotationCommitment(group: Group, totalCycles: number): string {
+	if (totalCycles <= 0) return "0";
+
+	// Decimal arithmetic, not float: `contributionAmount` is Decimal(20,7) and
+	// multiplying it through a JS number would drift in the last places.
+	return group.contributionAmount.mul(totalCycles).toString();
 }
 
 /** Translate a GroupMember row (optionally with its joined `user`) to snake_case. */
@@ -155,6 +209,25 @@ export function serializeTransaction(tx: Transaction) {
 		meta: tx.meta,
 		created_at: tx.createdAt,
 		updated_at: tx.updatedAt,
+	};
+}
+
+/**
+ * Translate a Notification row to snake_case.
+ *
+ * `dedupeKey` is deliberately NOT exposed. It is an internal idempotency key,
+ * it encodes internal row ids, and nothing in the UI has any use for it.
+ */
+export function serializeNotification(notification: Notification) {
+	return {
+		id: notification.id,
+		type: notification.type,
+		title: notification.title,
+		body: notification.body,
+		href: notification.href,
+		meta: notification.meta,
+		read_at: notification.readAt,
+		created_at: notification.createdAt,
 	};
 }
 

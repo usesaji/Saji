@@ -43,13 +43,27 @@ export async function POST(
 				// waitForPayouts=false: this call's job is confirming the caller's
 				// OWN contribution quickly, not settling a payout inline — that
 				// would add up to ~9s of on-ledger confirmation polling to every
-				// contribute click. The cron sweep and reconcileAfterResponse below
-				// still cover a completed cycle shortly after.
+				// contribute click.
 				await runIndexer(group.id, false);
 			} catch (error) {
 				console.warn("[contributions] inline reconcile failed:", error);
-				reconcileAfterResponse(group.id);
 			}
+
+			// ALWAYS, not only when the inline pass threw. This is the call that
+			// actually settles the cycle: `runIndexer(id, false)` skips
+			// `triggerPayoutIfReady` outright, so the pass above can confirm the
+			// LAST outstanding contribution and still leave the pot unpaid.
+			//
+			// Scheduling this only in the `catch` meant a fully-funded cycle was
+			// never paid out on the happy path — nothing called `trigger_payout`
+			// until the daily 00:00 UTC sweep, so the recipient saw an empty Saji
+			// Balance for up to 24 hours after the money was all in. Worse, the
+			// payout arrived SOONER when the inline reconcile failed, because only
+			// the failure path scheduled the pass that pays.
+			//
+			// Safe to run after a successful inline pass: the indexer is
+			// idempotent, and this one runs after the response is flushed.
+			reconcileAfterResponse(group.id);
 		}
 
 		// Return the member's current-cycle contribution AS THE CHAIN LEFT IT.

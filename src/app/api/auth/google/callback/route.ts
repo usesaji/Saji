@@ -13,7 +13,6 @@
  */
 
 import { prisma } from "@/server/db";
-import { createToken } from "@/server/auth";
 import {
 	createHandoffCode,
 	exchangeCode,
@@ -96,11 +95,10 @@ export async function GET(request: Request) {
 		});
 	}
 
-	const token = await createToken(user.id, "google");
-	// The real bearer token never touches the URL — only a short-lived,
-	// single-use handoff code does. The landing page exchanges it for the
-	// token via a POST body immediately after redirect.
-	const handoffCode = await createHandoffCode(token);
+	// No token is minted here. The handoff row records WHO the code is for; the
+	// session itself is created at redemption, so nothing recoverable as a
+	// credential is ever written to the database or placed on a URL.
+	const handoffCode = await createHandoffCode(user.id);
 
 	return new Response(null, {
 		status: 302,

@@ -1,4 +1,3 @@
-/* eslint-disable @next/next/no-img-element */
 import Image from "next/image";
 import React from "react";
 import { FaCalendarCheck } from "react-icons/fa";
@@ -7,6 +6,7 @@ import { RiMoneyDollarCircleFill } from "react-icons/ri";
 import { PiWarningCircleFill } from "react-icons/pi";
 import { Button } from "../../components/ui/button";
 import { CircleGroup } from "../../lib/utils/mock-data";
+import MemberAvatars from "./MemberAvatars";
 import ImageUpload from "../../components/shared/ImageUpload";
 
 const BANNER_PLACEHOLDER = "/images/group-test-img.png";
@@ -48,7 +48,7 @@ export default function GroupPreview({
 		title,
 		bannerImage,
 		target,
-		memberAvatarsImage,
+		memberAvatars,
 		frequency,
 		joinMessage,
 	} = group;
@@ -98,12 +98,8 @@ export default function GroupPreview({
 					<h5 className="text-xs font-light md:text-sm">
 						{memberCount} Members
 					</h5>
-					<div className="h-10 mt-2 md:h-14">
-						<img
-							src={memberAvatarsImage}
-							className="h-full"
-							alt="Group members"
-						/>
+					<div className="mt-2">
+						<MemberAvatars members={memberAvatars ?? []} total={memberCount} />
 					</div>
 				</div>
 			</section>
@@ -167,12 +163,8 @@ export default function GroupPreview({
 					<p className="text-xs font-light md:text-sm mt-2 lg:text-base w-2/3">
 						{joinMessage}
 					</p>
-					<div className="h-10 mt-4 md:h-14 md:mt-6">
-						<img
-							src={memberAvatarsImage}
-							className="h-full"
-							alt="Group members"
-						/>
+					<div className="mt-4 md:mt-6">
+						<MemberAvatars members={memberAvatars ?? []} total={memberCount} />
 					</div>
 				</div>
 

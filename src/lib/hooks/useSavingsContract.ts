@@ -3,6 +3,7 @@
 import { useCallback } from "react";
 import { currentAddress } from "../wallet";
 import {
+	CALL_OPTIONS,
 	savingsClient,
 	PayoutOrder,
 	LatePenalty,
@@ -53,7 +54,7 @@ export function useSavingsContract() {
 		async (input: {
 			token: string;
 			contributionAmount: string | number;
-			cycleLengthDays: number;
+			cycleLengthSeconds: number;
 			feeBps?: number;
 			lateFeeBps?: number;
 			gracePeriodHours?: number;
@@ -67,14 +68,16 @@ export function useSavingsContract() {
 				organizer,
 				token: input.token,
 				amount: toStroops(input.contributionAmount),
-				cycle_length: BigInt(input.cycleLengthDays * 86_400),
+				// Already seconds — the DB, this hook and the contract all agree on
+				// the unit now, so there is no conversion left to get wrong.
+				cycle_length: BigInt(input.cycleLengthSeconds),
 				fee_bps: input.feeBps ?? 0,
 				late_fee_bps: input.lateFeeBps ?? 0,
 				grace_period: BigInt((input.gracePeriodHours ?? 0) * 3_600),
 				payout_order: PAYOUT_ORDER[input.payoutOrder] ?? PayoutOrder.Manual,
 				late_penalty:
 					LATE_PENALTY[input.latePenalty] ?? LatePenalty.DeductFromBalance,
-			});
+			}, CALL_OPTIONS);
 
 			const sent = await tx.signAndSend();
 			const result = sent.result; // Result<u64>
@@ -93,7 +96,7 @@ export function useSavingsContract() {
 			const tx = await client.contribute({
 				group_id: BigInt(onchainGroupId),
 				member,
-			});
+			}, CALL_OPTIONS);
 			const sent = await tx.signAndSend();
 			const result = sent.result;
 			if (result && "unwrap" in result) result.unwrap(); // throws on Err
@@ -117,7 +120,7 @@ export function useSavingsContract() {
 			const tx = await client.join_group({
 				group_id: BigInt(onchainGroupId),
 				member: memberAddress,
-			});
+			}, CALL_OPTIONS);
 			const sent = await tx.signAndSend();
 			const result = sent.result;
 			if (result && "unwrap" in result) result.unwrap();
@@ -136,7 +139,7 @@ export function useSavingsContract() {
 
 			const tx = await client.start_cycle({
 				group_id: BigInt(onchainGroupId),
-			});
+			}, CALL_OPTIONS);
 			const sent = await tx.signAndSend();
 			const result = sent.result;
 			if (result && "unwrap" in result) result.unwrap();
@@ -161,7 +164,7 @@ export function useSavingsContract() {
 			const tx = await client.set_payout_order({
 				group_id: BigInt(onchainGroupId),
 				order: orderedAddresses,
-			});
+			}, CALL_OPTIONS);
 			const sent = await tx.signAndSend();
 			const result = sent.result;
 			if (result && "unwrap" in result) result.unwrap(); // throws on Err
@@ -186,7 +189,7 @@ export function useSavingsContract() {
 			const tx = await client.resolve_default({
 				group_id: BigInt(onchainGroupId),
 				member: memberAddress,
-			});
+			}, CALL_OPTIONS);
 			const sent = await tx.signAndSend();
 			const result = sent.result;
 			if (result && "unwrap" in result) result.unwrap(); // throws on Err
@@ -282,17 +285,23 @@ export function useSavingsContract() {
 
 	/**
 	 * Claim a completed-cycle payout the contract earmarked for the caller,
-	 * sending it to `to`. The member signs; the escrowed net moves from the
-	 * contract straight to that address — no hop through the member's own
-	 * wallet, so a withdrawal to a saved destination is ONE signature.
+	 * sending it to `to`. The member signs; the escrowed payout moves from the
+	 * contract STRAIGHT to that address — it never passes through the member's
+	 * own wallet, so receiving a payout is ONE signature and always an inbound
+	 * movement at the destination.
 	 *
-	 * `to` defaults to the member's own address (claim it home). It must hold a
-	 * trustline for the group's token or the claim reverts; check before calling.
+	 * `to` defaults to the member's own address. It must hold a trustline for
+	 * the group's token or the claim reverts; check before calling.
 	 *
-	 * Returns the claimed amount (stroops).
+	 * Returns the claimed amount (stroops) AND the transaction hash. The hash is
+	 * what lets the withdrawal appear in history with a working explorer link —
+	 * without it the row is recorded with no way to verify it on-chain.
 	 */
 	const claimPayout = useCallback(
-		async (onchainGroupId: bigint | number, to?: string): Promise<bigint> => {
+		async (
+			onchainGroupId: bigint | number,
+			to?: string,
+		): Promise<{ amount: bigint; hash: string | null }> => {
 			const member = await requireAddress();
 			const client = savingsClient(member);
 
@@ -300,11 +309,16 @@ export function useSavingsContract() {
 				group_id: BigInt(onchainGroupId),
 				member,
 				to: to ?? member,
-			});
+			}, CALL_OPTIONS);
 			const sent = await tx.signAndSend();
+
 			const result = sent.result;
-			if (result && "unwrap" in result) return result.unwrap();
-			return result as unknown as bigint;
+			const amount =
+				result && "unwrap" in result
+					? result.unwrap()
+					: (result as unknown as bigint);
+
+			return { amount, hash: sent.sendTransactionResponse?.hash ?? null };
 		},
 		[requireAddress],
 	);

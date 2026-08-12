@@ -23,6 +23,8 @@ import { useLiveCircle } from "@/lib/hooks/useLiveCircle";
 import { requireToken } from "@/lib/contract/tokens";
 import { addTrustline } from "@/lib/wallet";
 import { toast } from "@/lib/utils/toast";
+import { formatStroops, toStroopsOrZero } from "@/lib/stroops";
+import { formatCountdown } from "@/features/group/group-view";
 import { displayError, errorMessage } from "@/lib/errors";
 
 const AVATAR = "/images/user.jpg";
@@ -110,15 +112,69 @@ export default function CircleDashboardPage() {
 		: data?.group.status === "completed";
 	const currentCycle = live?.cycle ?? data?.current_cycle ?? 0;
 
-	// This cycle's recipient (from the DB rotation, indexed by the live cycle).
-	const currentRecipient = data?.payout_rotation.find(
-		(m) => !m.removed && m.position - 1 === currentCycle,
-	);
+	// Whose turn it is, from the CONTRACT (`next_recipient`), matched back to a
+	// rotation row by address.
+	//
+	// The old version recomputed this as `position - 1 === currentCycle`. The
+	// contract abandoned index-based selection on purpose — it scans for the
+	// first member who is neither defaulted nor already paid, precisely so a
+	// removal never mis-assigns a slot — so after any removal the index math
+	// named the wrong person. It also filtered on `removed`, which the indexer
+	// never set, making that guard permanently false. Falls back to the old
+	// derivation only when the chain read is unavailable.
+	// Preference order, most to least trustworthy:
+	//  1. the server's own resolution against the contract — works even when
+	//     addresses are masked by `hide_balances`,
+	//  2. matching our live `next_recipient` read by address,
+	//  3. the old index derivation, only when the chain is unreachable.
+	const currentRecipient =
+		(data?.current_recipient_user_id != null
+			? data.payout_rotation.find(
+					(m) => m.user_id === data.current_recipient_user_id,
+				)
+			: undefined) ??
+		(live?.nextRecipient
+			? data?.payout_rotation.find(
+					(m) => m.stellar_address === live.nextRecipient,
+				)
+			: data?.payout_rotation.find(
+					(m) => !m.removed && m.position - 1 === currentCycle,
+				));
 	const currentRecipientIsMe =
 		!!me && !!currentRecipient && currentRecipient.user_id === me.id;
 
 	// Has the current user paid THIS cycle? Live read wins; DB is the fallback.
 	const paidThisCycle = live ? live.paidThisCycle : !!data?.you_paid_this_cycle;
+
+	// What the wallet will ACTUALLY be asked to send: the contribution plus any
+	// late-fee debt, which the contract adds to the next deposit. Showing the
+	// bare contribution meant the first a user heard of a penalty was a larger
+	// number in their wallet popup.
+	const contributionStroops = toStroopsOrZero(
+		data?.group.contribution_amount ?? "0",
+	);
+	const lateFeeStroops = live?.myLateFeeStroops ?? 0n;
+	const amountDueStroops = contributionStroops + lateFeeStroops;
+
+	// Is this round's deposit window open yet?
+	//
+	// A cycle pays out as soon as everyone who owes has paid, so the schedule is
+	// carried by the NEXT round's deposit window — `contribute` reverts with
+	// `CycleNotOpen` until it arrives. `depositsOpenAt` is null when the chain
+	// could not tell us (an older deployed contract has no such function), and
+	// that case must read as OPEN: locking everyone out of a circle that is
+	// actually running would be far worse than one rejected signature. The
+	// contract remains the real gate.
+	const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+	const opensAt = live?.depositsOpenAt ?? null;
+	const roundClosed = opensAt !== null && now < opensAt;
+
+	// Only ticks while a round is actually closed, and stops once it opens.
+	useEffect(() => {
+		if (!roundClosed) return;
+		const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
+		return () => clearInterval(id);
+	}, [roundClosed]);
 
 	const contribute = async () => {
 		if (!group) return;
@@ -146,8 +202,27 @@ export default function CircleDashboardPage() {
 			// Record intent (idempotent), settle on-chain, then confirm the row.
 			await contributionsApi.store(group.id);
 			await contributeOnchain(onchainId);
-			await contributionsApi.confirm(group.id).catch(() => {});
-			toast.success("Your contribution is on-chain.", "Contribution sent");
+
+			// The money has moved and cannot be un-moved — from here on nothing
+			// may present itself as a failure. But a failed confirm was being
+			// swallowed entirely while the success toast fired anyway, so a
+			// member whose row stayed `pending` had no idea why, and the cron
+			// that eventually fixes it runs DAILY. Say so instead.
+			let confirmed = true;
+			try {
+				await contributionsApi.confirm(group.id);
+			} catch {
+				confirmed = false;
+			}
+
+			if (confirmed) {
+				toast.success("Your contribution is on-chain.", "Contribution sent");
+			} else {
+				toast.success(
+					"Your payment settled on-chain. It may show as pending here for a little while until we finish reconciling — your money is safe either way.",
+					"Payment sent",
+				);
+			}
 			// Read the chain directly for an INSTANT UI update (paid-this-cycle,
 			// pool, cycle) — no waiting on the backend indexer.
 			refreshLive();
@@ -392,26 +467,64 @@ export default function CircleDashboardPage() {
 					)}
 
 					{/* Contribute — runs here directly (the group page redirects back
-					    to this one once the cycle is active, so a link would dead-end). */}
+					    to this one once the cycle is active, so a link would dead-end).
+
+					    The recipient is EXEMPT: the contract rejects a contribution
+					    from whoever is due to collect, so offering them a pay button
+					    would ask them to sign a transaction we already know reverts. */}
 					<div className="mt-6">
-						<Button
-							onClick={contribute}
-							isLoading={contributing}
-							disabled={paidThisCycle}
-							className="w-full md:w-auto"
-						>
-							{paidThisCycle
-								? "You've paid this cycle"
-								: hasActivity
-									? "Make a Payment"
-									: "Make First Payment"}
-						</Button>
-						{paidThisCycle && (
-							<p className="mt-2 text-xs font-light text-muted-foreground">
-								You&apos;re paid up for this cycle. Once everyone else has
-								contributed, the payout is earmarked for this cycle&apos;s
-								recipient, who claims it from their Saji Balance.
-							</p>
+						{currentRecipientIsMe ? (
+							<div className="rounded-2xl bg-[#efeaff] px-4 py-4 md:px-6">
+								<p className="text-sm font-medium md:text-base">
+									It&apos;s your turn to collect this cycle
+								</p>
+								<p className="mt-1 text-xs font-light text-neutral-dark">
+									You don&apos;t pay into your own payout — the others fund it.
+									Once everyone else has contributed, it&apos;s earmarked for
+									you and you can withdraw it from your Saji Balance.
+								</p>
+							</div>
+						) : (
+							<>
+								<Button
+									onClick={contribute}
+									isLoading={contributing}
+									disabled={paidThisCycle || roundClosed}
+									className="w-full md:w-auto"
+								>
+									{paidThisCycle
+										? "You've paid this cycle"
+										: roundClosed
+											? `Next round opens in ${formatCountdown(opensAt! - now)}`
+											: hasActivity
+												? `Pay ${formatStroops(amountDueStroops)} ${assetCode}`
+												: `Make First Payment · ${formatStroops(amountDueStroops)} ${assetCode}`}
+								</Button>
+
+								{roundClosed && !paidThisCycle && (
+									<p className="mt-2 text-xs font-light text-muted-foreground">
+										The last round has been paid out. Contributions for the next
+										one open on schedule, so the circle keeps to the frequency
+										everyone agreed to.
+									</p>
+								)}
+
+								{!paidThisCycle && lateFeeStroops > 0n && (
+									<p className="mt-2 text-xs font-medium text-error-500">
+										Includes a {formatStroops(lateFeeStroops)} {assetCode} late
+										fee from a missed round. It goes into this cycle&apos;s pot,
+										not to the organizer.
+									</p>
+								)}
+
+								{paidThisCycle && (
+									<p className="mt-2 text-xs font-light text-muted-foreground">
+										You&apos;re paid up for this cycle. Once everyone else has
+										contributed, the payout is earmarked for this cycle&apos;s
+										recipient, who claims it from their Saji Balance.
+									</p>
+								)}
+							</>
 						)}
 					</div>
 

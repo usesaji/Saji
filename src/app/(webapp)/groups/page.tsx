@@ -2,7 +2,6 @@ import React from "react";
 import { HiOutlineAdjustmentsHorizontal } from "react-icons/hi2";
 import GroupStats from "../../../features/group/GroupStats";
 import GroupList from "../../../features/group/GroupList";
-import DiscoverChallenges from "../../../features/overview/DiscoverChallenges";
 import CreateGroupFloatBtn from "../../../features/group/CreateGroupFloatBtn";
 
 export default function Page() {
@@ -25,7 +24,6 @@ export default function Page() {
 			<GroupList />
 
 			{/* Public saving groups = open circles anyone can join. */}
-			<DiscoverChallenges title="Public Saving Groups" />
 
 			<CreateGroupFloatBtn />
 		</div>

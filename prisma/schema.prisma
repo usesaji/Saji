@@ -56,11 +56,19 @@ enum LatePenalty {
   remove_member
 }
 
+// Presets the UI offers. `custom` carries an explicit `cycleLengthSeconds`.
+// Sub-daily options exist because the contract measures cycles in SECONDS and
+// short circles are genuinely useful (testing, and fast community savings).
 enum ContributionFrequency {
+  hourly
+  six_hourly
   daily
+  two_daily
   weekly
   bi_weekly
   monthly
+  quarterly
+  yearly
   custom
 }
 
@@ -143,6 +151,10 @@ model User {
   gender      Gender?
   address     String?
 
+  /// Opt-out for emailed notifications. In-app notifications are always
+  /// written — they are the user's own history, not an interruption.
+  notifyByEmail Boolean @default(true) @map("notify_by_email")
+
   // Password & Security settings.
   twofaOnSuspiciousWithdrawal Boolean   @default(false) @map("twofa_on_suspicious_withdrawal")
   lockAfterFailedAttempts     Int       @default(5) @map("lock_after_failed_attempts") @db.SmallInt
@@ -161,6 +173,8 @@ model User {
   withdrawInfos     WithdrawInfo[]
   challengeDeposits ChallengeDeposit[]
   tokens            AccessToken[]
+  oauthHandoffs     OauthHandoff[]
+  notifications     Notification[]
 
   @@map("users")
 }
@@ -222,14 +236,24 @@ model OauthHandoff {
   id   BigInt @id @default(autoincrement())
   // Only the hash is stored — same reasoning as AccessToken.tokenHash.
   codeHash String @unique @map("code_hash")
-  // The real bearer token this code redeems for.
-  token String
+
+  /// WHO the code redeems for — never a token.
+  ///
+  /// This column used to hold the real 30-day bearer token in PLAINTEXT, beside
+  /// a carefully-hashed code, which made the hashing beside it pointless: the
+  /// table was a list of live credentials. Hashing it is not an option (the
+  /// value has to be handed back), so the token is no longer stored at all —
+  /// it is minted at redemption from this user id instead. Nothing at rest is
+  /// usable as a credential.
+  userId BigInt @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   expiresAt DateTime @map("expires_at")
 
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([expiresAt])
+  @@index([userId])
   @@map("oauth_handoffs")
 }
 
@@ -263,6 +287,24 @@ model WalletChallenge {
 /// The Soroban contract is the source of truth for money and rotation. This
 /// table MIRRORS that on-chain state and holds off-chain metadata (name,
 /// description, photo) that does not belong on-chain.
+/// Fixed-window rate-limit counters.
+///
+/// Lives in Postgres rather than process memory because serverless instances do
+/// not share memory: an in-memory limiter enforces "6 per minute PER WARM
+/// INSTANCE", which under any real load is not a limit at all. The auth
+/// endpoints this guards are low-volume, so the extra round-trip is cheap next
+/// to the brute-force protection it actually provides.
+model RateLimit {
+  /// The bucket key, e.g. "login:1.2.3.4". Unique so an upsert is atomic.
+  key       String   @id
+  count     Int      @default(0)
+  /// When the current window ends; a request after this resets the counter.
+  resetAt   DateTime @map("reset_at")
+
+  @@index([resetAt])
+  @@map("rate_limits")
+}
+
 model Group {
   id          BigInt  @id @default(autoincrement())
   name        String
@@ -281,7 +323,11 @@ model Group {
 
   contributionAmount    Decimal               @map("contribution_amount") @db.Decimal(20, 7)
   targetAmount          Decimal?              @map("target_amount") @db.Decimal(20, 7)
-  cycleLengthDays       Int                   @default(7) @map("cycle_length_days")
+  // SECONDS, matching the contract's `cycle_length` exactly so the two can be
+  // compared without a unit conversion (see describeConfigMismatch). Days could
+  // not express the hourly/6-hourly presets, and every conversion between the
+  // two units was a place for a units bug to hide.
+  cycleLengthSeconds    Int                   @default(604800) @map("cycle_length_seconds")
   contributionFrequency ContributionFrequency @default(weekly) @map("contribution_frequency")
 
   feeBps           Int         @default(0) @map("fee_bps") @db.SmallInt
@@ -321,6 +367,8 @@ model Group {
 
   @@index([circleKind])
   @@index([organizerId])
+  // `status: { in: [...] }` on the dashboard and the challenge browse list.
+  @@index([status])
   @@map("groups")
 }
 
@@ -345,6 +393,10 @@ model GroupMember {
 
   // A user joins a given group at most once.
   @@unique([groupId, userId])
+  // The composite unique above starts with groupId, so Postgres cannot use it
+  // for "which circles is THIS user in" — the query behind /api/dashboard,
+  // /api/wallet/my-circles and /api/wallet/saji-balance.
+  @@index([userId, status])
   @@map("group_members")
 }
 
@@ -373,6 +425,11 @@ model Contribution {
 
   // One contribution per member per cycle — enforced on-chain too.
   @@unique([groupId, userId, cycle])
+  // Leading column of the unique is groupId, so neither of these is covered:
+  // the user's own contribution history, and the per-group confirmed-sum used
+  // for pool_balance on the circle and group dashboards.
+  @@index([userId, status])
+  @@index([groupId, status])
   @@map("contributions")
 }
 
@@ -399,6 +456,9 @@ model Payout {
 
   // One payout per group per cycle.
   @@unique([groupId, cycle])
+  // Filtered on every dashboard and payout-summary request; there was no index
+  // on this FK at all, so those endpoints sequential-scanned the table.
+  @@index([recipientId])
   @@map("payouts")
 }
 
@@ -454,7 +514,73 @@ model Transaction {
 
   @@index([subjectType, subjectId])
   @@index([userId])
+  @@index([groupId])
   @@map("transactions")
+}
+
+/// What kind of completed action a notification is about. The value is also the
+/// switch key the email templates and the in-app icon render from, so adding a
+/// variant means adding a case in `src/server/notifications.ts`.
+enum NotificationType {
+  /// Someone asked to join a circle you organize.
+  join_requested
+  /// Your request to join a circle was approved.
+  join_approved
+  /// A member's contribution for the cycle was confirmed on-chain.
+  contribution_confirmed
+  /// A circle payout was earmarked for you and is ready to claim.
+  payout_received
+  /// A withdrawal you made left the app.
+  withdrawal_sent
+  /// A circle you are in finished its last rotation.
+  circle_completed
+}
+
+/// An instant, per-user notification raised the moment an action COMPLETES.
+///
+/// Event-driven on purpose: emitted from `after()` at the point the action
+/// finishes, never discovered by a scheduled sweep. That is what makes it
+/// instant, and it is also why every emit needs `dedupeKey` — the indexer is
+/// idempotent and re-runs constantly, so the same completed payout is observed
+/// on many passes and must only ever notify once.
+model Notification {
+  id     BigInt @id @default(autoincrement())
+  userId BigInt @map("user_id")
+
+  type NotificationType
+
+  /// Rendered as-is in the bell list. Written at emit time rather than
+  /// templated at read time, so a later copy change cannot rewrite history.
+  title String
+  body  String
+
+  /// Where clicking it should go, e.g. `/groups/12/circle`. Relative so it
+  /// survives a domain change.
+  href String?
+
+  /// Free-form payload for the UI (amount, asset code, group name).
+  meta Json?
+
+  /// IDEMPOTENCY KEY, and the whole reason repeated reconciles don't spam.
+  /// Deterministic per real-world event — `payout:{payoutId}`,
+  /// `contribution:{contributionId}` — so a second attempt to raise the same
+  /// notification collides here instead of sending a duplicate email.
+  dedupeKey String @unique @map("dedupe_key")
+
+  readAt DateTime? @map("read_at")
+
+  /// When the email actually went out. Null means in-app only: either the user
+  /// opted out, or the send failed and was swallowed so it could not fail the
+  /// action that triggered it.
+  emailedAt DateTime? @map("emailed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Drives the bell: unread-first, newest-first, scoped to one user.
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
 }
 
 /// Where a user withdraws to. Multiple per user, one flagged primary.

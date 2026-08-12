@@ -125,7 +125,7 @@ fn a_challenge_is_locked_to_its_first_token() {
         s.client.try_deposit(&1, &ada, &other, &100),
         Err(Ok(Error::WrongToken)),
     );
-    assert_eq!(s.client.token_of(&1), Some(s.token.clone()));
+    assert_eq!(s.client.token_of(&1, &ada), Some(s.token.clone()));
 }
 
 // ----------------------------------------------------------------------------
@@ -314,8 +314,8 @@ fn different_challenges_may_use_different_tokens() {
 
     s.client.deposit(&2, &ada, &other, &500);
 
-    assert_eq!(s.client.token_of(&1), Some(s.token.clone()));
-    assert_eq!(s.client.token_of(&2), Some(other.clone()));
+    assert_eq!(s.client.token_of(&1, &ada), Some(s.token.clone()));
+    assert_eq!(s.client.token_of(&2, &ada), Some(other.clone()));
     assert_eq!(s.client.balance_of(&2, &ada), 500);
 
     // Each withdraws in its own asset.

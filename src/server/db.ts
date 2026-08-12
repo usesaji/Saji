@@ -60,7 +60,24 @@ function createClient(): PrismaClient {
 	}
 
 	return new PrismaClient({
-		adapter: new PrismaPg({ connectionString }),
+		// The first argument is a full `pg.PoolConfig`, not just a URL.
+		//
+		// `keepAlive` is the one that matters against Supabase's Supavisor
+		// pooler: without TCP keepalives an idle connection can be dropped by
+		// the pooler (or anything NATting the path) without a FIN reaching us,
+		// so `pg` hands the next query a socket that is already dead and the
+		// request fails with a bare "Connection terminated unexpectedly" —
+		// which is not a Prisma error code and so matches no retry branch below.
+		adapter: new PrismaPg({
+			connectionString,
+			keepAlive: true,
+			// Probe before the common 60s NAT/idle cutoffs rather than after.
+			keepAliveInitialDelayMillis: 30_000,
+			// Default is 10s. The session pooler has been observed taking ~3s
+			// just to hand over a connection from this network, so 10s leaves
+			// very little headroom on a cold pool.
+			connectionTimeoutMillis: 20_000,
+		}),
 		log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
 		transactionOptions: {
 			// Prisma's default is 5s. Verified against a live Supabase free-tier

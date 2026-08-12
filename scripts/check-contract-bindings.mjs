@@ -28,7 +28,7 @@ const TARGETS = [
 		name: "savings",
 		file: "src/lib/contract/savings/src/index.ts",
 		envVar: "NEXT_PUBLIC_SAVINGS_CONTRACT_ID",
-		fallback: "CA3YEH744GMHOKALGS4YXFYXF3LT6XEPL5EPUF6DDWBJC2IDOFTT5LVT",
+		fallback: "CA3UA2T54JV4OCIKNTMBRNZFZFV6I4PYCWWZ4REY7LH4S7VGXIMPLXNH",
 	},
 	{
 		name: "challenge",

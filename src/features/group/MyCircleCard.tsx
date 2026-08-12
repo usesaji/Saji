@@ -1,11 +1,11 @@
 'use client'
-/* eslint-disable @next/next/no-img-element */
 import Image from "next/image";
 import React from "react";
 import { Button } from "../../components/ui/button";
 import { getProgressStyle } from "../../lib/utils/progress-style";
 import { CircleGroup } from "../../lib/utils/mock-data";
 import { pageRoutes } from "../../config/routes";
+import MemberAvatars from "./MemberAvatars";
 import { useRouter } from "next/navigation";
 
 const statusStyles: Record<CircleGroup["status"], string> = {
@@ -31,9 +31,9 @@ const MyCircleCard = ({ circle }: MyCircleCardProps) => {
 		current,
 		target,
 		status,
-		nextPayoutDate,
+		nextDepositDate,
 		memberCount,
-		memberAvatarsImage,
+		memberAvatars,
 	} = circle;
 
 	const progressPercent =
@@ -81,9 +81,11 @@ const MyCircleCard = ({ circle }: MyCircleCardProps) => {
 					<span className="text-xs max-md:hidden">{subtitle}</span>
 				</h5>
 				<div className="flex items-center gap-1 md:hidden">
-					<div className="h-4">
-						<img src={memberAvatarsImage} className="h-full" alt="" />
-					</div>
+					<MemberAvatars
+						members={memberAvatars ?? []}
+						total={memberCount}
+						size="sm"
+					/>
 					<div className="text-[10px] ssm:text-xs md:text-sm md:hidden">
 						{memberCount} Members
 					</div>
@@ -119,7 +121,7 @@ const MyCircleCard = ({ circle }: MyCircleCardProps) => {
 					</svg>
 
 					<span className="text-[10px] sm:text-sm ">
-						Next Payout: {nextPayoutDate}
+						Next Deposit: {nextDepositDate}
 					</span>
 				</div>
 				<div className="text-xs sm:text-sm md:text-base ">
@@ -131,9 +133,10 @@ const MyCircleCard = ({ circle }: MyCircleCardProps) => {
 				<div>
 					<h6 className="text-xs mb-2">MEMBERS</h6>
 					<div className="flex items-center gap-2 flex-wrap">
-						<div className="h-8.5">
-							<img src={memberAvatarsImage} className="h-full" alt="" />
-						</div>
+						<MemberAvatars
+							members={memberAvatars ?? []}
+							total={memberCount}
+						/>
 						<div className="whitespace-nowrap max-lg:text-sm">
 							{memberCount} Members
 						</div>

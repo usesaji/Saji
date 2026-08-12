@@ -24,7 +24,6 @@ import {
 	IS_MAINNET,
 	NETWORK_PASSPHRASE as NETWORK_PASSPHRASE_FOR_NETWORK,
 } from "../stellar-network";
-import { toStroopsOrZero } from "../stroops";
 
 // Network comes from NEXT_PUBLIC_STELLAR_NETWORK (see lib/stellar-network).
 // This signs every payment and trustline, so it MUST match the network the
@@ -176,55 +175,19 @@ function describeSubmitError(err: unknown, ctx: { code: string }): Error {
 	return new Error(msg);
 }
 
-/**
- * How much of `code` this account can actually SEND right now, in stroops.
- *
- * For issued assets that's simply the balance. For native XLM it is not: every
- * account must retain a base reserve (1 XLM + 0.5 per subentry, e.g. each
- * trustline) plus the transaction fee. Sending the full balance is rejected
- * with `op_underfunded`, so "Max" has to mean balance-minus-reserve.
- *
- * THROWS if Horizon can't be reached. Returning 0 on failure would be
- * indistinguishable from an empty wallet, which on the withdraw screen renders
- * as "No spendable USDC in your wallet" — a false statement about the user's
- * money. Callers must surface the network error instead.
- */
-export async function spendableBalance(
-	address: string,
-	code: string,
-): Promise<bigint> {
-	const res = await fetch(`${HORIZON_URL}/accounts/${address}`);
-	if (res.status === 404) return 0n; // account genuinely doesn't exist yet
-	if (!res.ok) {
-		throw new Error(
-			`Couldn't read your balance from the network (Horizon ${res.status}).`,
-		);
-	}
-	const account: {
-		balances?: { asset_type?: string; asset_code?: string; balance?: string }[];
-		subentry_count?: number;
-	} = await res.json();
-
-	const entry = (account.balances ?? []).find((b) =>
-		code === "XLM" ? b.asset_type === "native" : b.asset_code === code,
-	);
-	const balance = toStroopsOrZero(entry?.balance ?? "0");
-	if (code !== "XLM") return balance > 0n ? balance : 0n;
-
-	// 1 XLM base + 0.5 per subentry, plus headroom for the fee — in stroops so
-	// the subtraction is exact.
-	const reserve =
-		10_000_000n +
-		5_000_000n * BigInt(account.subentry_count ?? 0) +
-		100_000n;
-	const spendable = balance - reserve;
-	return spendable > 0n ? spendable : 0n;
-}
 
 /**
  * True if `address` already trusts `code`/`issuer` — i.e. it can hold that
  * asset. Stellar rejects payments of an issued asset to an account without a
  * trustline, so this gates the "Add trustline" affordance.
+ *
+ * THROWS if Horizon can't be reached: a failed read is NOT evidence of a
+ * missing trustline. This used to
+ * `return false` on any non-OK response, so a Horizon hiccup made the withdraw
+ * screen state — confidently, and about an account the user may not even
+ * control — that the destination could not receive the asset. That blocks a
+ * perfectly good withdrawal and sends the user off to add a trustline that is
+ * very likely already there. Callers must surface the network error instead.
  */
 export async function hasTrustline(
 	address: string,
@@ -232,7 +195,14 @@ export async function hasTrustline(
 	issuer: string,
 ): Promise<boolean> {
 	const res = await fetch(`${HORIZON_URL}/accounts/${address}`);
-	if (!res.ok) return false;
+	// An account that does not exist holds no trustlines. That is a real answer
+	// from the network, not a failed read.
+	if (res.status === 404) return false;
+	if (!res.ok) {
+		throw new Error(
+			`Couldn't check that destination on the network (Horizon ${res.status}). Please try again.`,
+		);
+	}
 	const account: { balances?: { asset_code?: string; asset_issuer?: string }[] } =
 		await res.json();
 	return (account.balances ?? []).some(
@@ -281,61 +251,3 @@ export async function addTrustline(
 	}
 }
 
-/**
- * Withdraw `amount` (whole tokens) of an asset FROM the connected wallet TO a
- * destination address. Built, signed, and submitted entirely CLIENT-SIDE via
- * Horizon — the browser reaches the network directly, so this doesn't depend on
- * the backend reaching the RPC (which the artisan-serve worker can't — the DNS
- * wall). Non-custodial: the user's own wallet signs; we never touch the key.
- *
- * `code` is the asset code ("XLM"/"USDC"/"USDT"); `issuer` is the classic issuer
- * account for an issued asset, or null/omitted for native XLM. Returns the tx
- * hash on success.
- */
-export async function withdrawToken(input: {
-	from: string;
-	to: string;
-	amount: string | number;
-	code: string;
-	issuer?: string | null;
-}): Promise<string> {
-	const { Asset, BASE_FEE, Horizon, Operation, TransactionBuilder } =
-		await import("@stellar/stellar-sdk");
-
-	const server = new Horizon.Server(HORIZON_URL);
-	const account = await server.loadAccount(input.from);
-
-	// Native XLM vs an issued asset (USDC/USDT). A non-XLM code with no issuer is
-	// a configuration error, NOT a reason to fall back to native — that would
-	// silently send XLM while the UI promised USDC/USDT.
-	if (input.code !== "XLM" && !input.issuer) {
-		throw new Error(
-			`Missing issuer for ${input.code} — cannot build this withdrawal.`,
-		);
-	}
-	const asset =
-		input.code === "XLM" ? Asset.native() : new Asset(input.code, input.issuer!);
-
-	const tx = new TransactionBuilder(account, {
-		fee: BASE_FEE,
-		networkPassphrase: NETWORK_PASSPHRASE,
-	})
-		.addOperation(
-			Operation.payment({
-				destination: input.to,
-				asset,
-				amount: String(input.amount),
-			}),
-		)
-		.setTimeout(180)
-		.build();
-
-	const signed = await signXdr(tx.toXDR());
-	const envelope = TransactionBuilder.fromXDR(signed, NETWORK_PASSPHRASE);
-	try {
-		const res = await server.submitTransaction(envelope);
-		return res.hash;
-	} catch (err) {
-		throw describeSubmitError(err, { code: input.code });
-	}
-}

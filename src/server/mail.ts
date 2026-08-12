@@ -19,6 +19,21 @@ function config() {
 	return { apiKey, from: from ? `${fromName} <${from}>` : "", fromName };
 }
 
+/**
+ * Send one transactional email. THROWS on a failed send.
+ *
+ * Exported so the notification emitter can reuse this transport rather than
+ * standing up a second one. Callers that must not fail the action they were
+ * triggered by are responsible for catching — see `server/notifications.ts`.
+ */
+export async function sendEmail(
+	to: string,
+	subject: string,
+	html: string,
+): Promise<void> {
+	return send(to, subject, html);
+}
+
 async function send(to: string, subject: string, html: string): Promise<void> {
 	const { apiKey, from } = config();
 

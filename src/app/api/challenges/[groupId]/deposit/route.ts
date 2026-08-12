@@ -9,6 +9,7 @@
  */
 
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json, parseBody, validationError } from "@/server/http";
@@ -54,15 +55,32 @@ export async function POST(
 			});
 		}
 
-		const deposit = await prisma.challengeDeposit.create({
-			data: {
-				groupId: group.id,
-				userId: user.id,
-				amount: String(data.amount),
-				stellarTxHash: data.stellar_tx_hash,
-				status: "pending",
-			},
-		});
+		// The check above is a TOCTOU: two concurrent posts of the same hash both
+		// pass it, and the loser hits the unique constraint. Prisma raises P2002,
+		// which nothing caught — so a duplicate submitted twice at once returned
+		// a bare 500 instead of the 422 the check just above was written to give.
+		let deposit;
+		try {
+			deposit = await prisma.challengeDeposit.create({
+				data: {
+					groupId: group.id,
+					userId: user.id,
+					amount: String(data.amount),
+					stellarTxHash: data.stellar_tx_hash,
+					status: "pending",
+				},
+			});
+		} catch (error) {
+			if (
+				error instanceof Prisma.PrismaClientKnownRequestError &&
+				error.code === "P2002"
+			) {
+				throw validationError({
+					stellar_tx_hash: ["That transaction has already been recorded."],
+				});
+			}
+			throw error;
+		}
 
 		// Reconcile against the challenge contract's balance_of right away so
 		// the row doesn't sit pending until the next cron sweep — mirrors

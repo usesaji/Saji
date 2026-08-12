@@ -8,9 +8,17 @@
 
 import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
-import { handle, json } from "@/server/http";
-import { assertVisible, findGroupOr404 } from "@/server/groups";
-import { fromStroops, toStroops } from "@/server/stellar/service";
+import { HttpError, handle, json } from "@/server/http";
+import {
+	assertVisible,
+	findGroupOr404,
+	viewershipOf,
+} from "@/server/groups";
+import {
+	fromStroops,
+	nextRecipient,
+	toStroops,
+} from "@/server/stellar/service";
 import { percentOf } from "@/server/challenges";
 
 /** How many recent on-chain events the cycle-activity list shows. */
@@ -27,6 +35,48 @@ export async function GET(
 		const group = await findGroupOr404(groupId);
 		await assertVisible(group, user.id);
 
+		const viewership = await viewershipOf(group, user.id);
+
+		/**
+		 * A PENDING requester does not get the circle's financial interior.
+		 *
+		 * `isVisibleTo` admits `pending` so someone can see what they asked to
+		 * join — reasonable on its own, but combined with an invite link that
+		 * anyone can forward, it meant: hold the link → POST /join → instantly
+		 * read every member's name and wallet address, the pool balance and the
+		 * full contribution history. Approval gated PAYING IN, not seeing.
+		 *
+		 * They keep exactly what the join preview already showed them, which is
+		 * what they need to decide, and nothing about who else is inside.
+		 */
+		if (viewership === "pending") {
+			throw new HttpError(
+				403,
+				"Your request to join is still pending. You'll see the circle's activity once the organizer approves you.",
+			);
+		}
+
+		/**
+		 * "Contribute Privacy" (`hide_balances`) is now ENFORCED here.
+		 *
+		 * It was stored, serialised and rendered as a setting, but no circle
+		 * endpoint read it — only the challenge summary did. A user could switch
+		 * on a privacy control that changed nothing, which is worse than not
+		 * offering it, because they may share on the strength of it.
+		 *
+		 * What it actually protects is each member's STELLAR ADDRESS. That field
+		 * is not merely "their balance in this circle" — an address is a public
+		 * key into a public ledger, so publishing it to the group exposes that
+		 * person's entire external wallet: every asset they hold and every
+		 * transaction they have ever made, circle-related or not. Explorer links
+		 * on other members' activity reveal the same thing by another route.
+		 *
+		 * The organizer is exempt: they admit members on-chain by signing with
+		 * those addresses, so hiding them would break the circle's operation.
+		 */
+		const maskAddresses =
+			group.hideBalances && viewership !== "organizer";
+
 		const [memberCount, confirmed, rotation, cycleActivity] =
 			await Promise.all([
 				prisma.groupMember.count({
@@ -41,7 +91,9 @@ export async function GET(
 				// position.
 				prisma.groupMember.findMany({
 					where: { groupId: group.id, status: { in: ["approved", "removed"] } },
-					include: { user: { select: { id: true, name: true } } },
+					include: {
+						user: { select: { id: true, name: true, stellarAddress: true } },
+					},
 					orderBy: { payoutPosition: "asc" },
 				}),
 				prisma.transaction.findMany({
@@ -50,6 +102,9 @@ export async function GET(
 						id: true,
 						type: true,
 						status: true,
+						// Needed to decide whose rows keep their explorer link when
+						// the circle has privacy on.
+						userId: true,
 						stellarTxHash: true,
 						explorerUrl: true,
 						createdAt: true,
@@ -80,21 +135,47 @@ export async function GET(
 		}
 
 		// In a rotating circle the "aim" is one full payout — the pooled amount
-		// the member eventually receives: contribution × member count.
+		// the member eventually receives.
+		//
+		// That is contribution × (members - 1), NOT × members: the cycle's
+		// recipient is exempt from funding their own pot, so only the others pay
+		// in. Using the full member count overstated every member's target and
+		// the payout figure shown on the circle screen by one contribution.
+		// Who the contract will actually pay this cycle, mapped back to a user.
+		// Done here so the rotation can be labelled without publishing every
+		// member's wallet address to every other member.
+		let currentRecipientUserId: bigint | null = null;
+		if (group.onchainGroupId !== null) {
+			try {
+				const address = await nextRecipient(group.onchainGroupId);
+				if (address) {
+					currentRecipientUserId =
+						rotation.find((m) => m.user.stellarAddress === address)?.userId ??
+						null;
+				}
+			} catch {
+				// RPC unavailable — the client falls back to its own live read.
+			}
+		}
+
 		const contribution = toStroops(group.contributionAmount.toString());
-		const userAim = contribution * BigInt(Math.max(memberCount, 1));
+		const payers = Math.max(memberCount - 1, 1);
+		const userAim = contribution * BigInt(payers);
 
 		// Circle progress: a BLENDED figure across the full rotation, so the bar
 		// moves smoothly instead of jumping a whole member's share at a time —
 		// completed cycles, plus the fraction of the CURRENT cycle contributed
 		// so far, over the total number of cycles (one payout per member).
 		//
-		// e.g. 2 members, cycle 0 paid out, 1 of 2 paid this cycle →
-		// (1 + 0.5) / 2 = 75%. Completed cycles alone would read a coarse 50%.
+		// e.g. 3 members, cycle 0 paid out, 1 of the 2 who owe has paid →
+		// (1 + 0.5) / 3 = 50%. Completed cycles alone would read a coarse 33%.
+		//
+		// The denominator for the in-flight cycle is `payers`, not the member
+		// count — the recipient owes nothing, so the bar could never reach a
+		// full cycle otherwise.
 		const totalCycles = Math.max(memberCount, 1);
 		const completedCycles = Math.min(group.currentCycle, totalCycles);
-		const currentCycleFraction =
-			memberCount > 0 ? Math.min(1, paidThisCycle.size / memberCount) : 0;
+		const currentCycleFraction = Math.min(1, paidThisCycle.size / payers);
 
 		// Don't let the in-progress cycle push past 100% once the rotation is
 		// complete — there is no "current cycle" left to fill.
@@ -133,10 +214,21 @@ export async function GET(
 				cycles_total: totalCycles,
 				percent: circleProgressPct,
 			},
+			// Resolved SERVER-side from the contract so the UI can name this
+			// cycle's recipient without every member's address being published to
+			// every other member — which is what `hide_balances` exists to stop.
+			// Best-effort: null falls the client back to its own chain read.
+			current_recipient_user_id: currentRecipientUserId,
 			payout_rotation: rotation.map((member) => ({
 				position: member.payoutPosition,
 				user_id: member.userId,
 				name: member.user.name,
+				// Your own address is always yours to see; others' are masked when
+				// the circle has privacy on.
+				stellar_address:
+					maskAddresses && member.userId !== user.id
+						? null
+						: member.user.stellarAddress,
 				has_received_payout: member.hasReceivedPayout,
 				removed: member.status === "removed",
 			})),
@@ -148,8 +240,13 @@ export async function GET(
 				id: tx.id,
 				type: tx.type,
 				status: tx.status,
-				stellar_tx_hash: tx.stellarTxHash,
-				explorer_url: tx.explorerUrl,
+				// An explorer link is an address by another route: following one
+				// reveals the participant's wallet and its whole history. Kept for
+				// your own rows so you can still verify your own money.
+				stellar_tx_hash:
+					maskAddresses && tx.userId !== user.id ? null : tx.stellarTxHash,
+				explorer_url:
+					maskAddresses && tx.userId !== user.id ? null : tx.explorerUrl,
 				created_at: tx.createdAt,
 			})),
 		});

@@ -3,15 +3,46 @@
 import Link from "next/link";
 import { HiChevronRight } from "react-icons/hi2";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useApi } from "../../../lib/hooks/useApi";
-import { profile as profileApi, assetUrl } from "../../../lib/api";
+import {
+	profile as profileApi,
+	auth as authApi,
+	assetUrl,
+	clearToken,
+} from "../../../lib/api";
+import { toast } from "../../../lib/utils/toast";
 import ImageUpload from "../../../components/shared/ImageUpload";
 import { pageRoutes } from "../../../config/routes";
 
 const AVATAR_PLACEHOLDER = "/images/user.jpg";
 
 export default function Page() {
+	const router = useRouter();
 	const { data, loading, error, refetch } = useApi(() => profileApi.show(), []);
+	const [loggingOut, setLoggingOut] = useState(false);
+
+	/**
+	 * Ends the session.
+	 *
+	 * `POST /api/auth/logout` revokes the token server-side so it cannot be
+	 * replayed if it was ever captured — but the local token is cleared either
+	 * way. If the request fails, refusing to log the user out would leave them
+	 * stuck signed in on a device they are trying to leave, which is worse than
+	 * a token that expires on its own within 30 days.
+	 */
+	const logout = async () => {
+		setLoggingOut(true);
+		try {
+			await authApi.logout();
+		} catch {
+			// Revocation failed; clear locally regardless.
+		} finally {
+			clearToken();
+			router.replace(pageRoutes.authRoutes.LOGIN);
+			toast.success("", "Signed out");
+		}
+	};
 
 	// Local copy of the avatar so an upload reflects immediately without refetch.
 	const [avatar, setAvatar] = useState<string | null>(null);
@@ -105,6 +136,18 @@ export default function Page() {
 						<HiChevronRight className="text-xl text-muted-foreground" />
 					</Link>
 				))}
+
+				<button
+					type="button"
+					onClick={logout}
+					disabled={loggingOut}
+					className="flex w-full items-center justify-between rounded-2xl bg-[#f7f7f7] px-4 py-4 text-left transition-colors hover:bg-[#f0f0f0] disabled:opacity-60 md:px-6"
+				>
+					<span className="text-sm font-medium text-error-500 md:text-base">
+						{loggingOut ? "Signing out…" : "Log Out"}
+					</span>
+					<HiChevronRight className="text-xl text-error-500" />
+				</button>
 			</div>
 		</div>
 	);

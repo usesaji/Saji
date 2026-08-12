@@ -47,10 +47,20 @@ use soroban_sdk::{
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
-    /// (challenge_id) -> the token this challenge saves in. Set by the first
-    /// deposit and immutable thereafter, so a later depositor cannot redirect
-    /// the challenge to a token the existing balances aren't held in.
-    Token(u64),
+    /// (challenge_id, member) -> the token THIS MEMBER saves in. Set by their
+    /// first deposit and immutable thereafter, so a later deposit cannot mix a
+    /// second asset into a balance figure denominated in the first.
+    ///
+    /// Keyed per member, not per challenge. A challenge-wide key made the token
+    /// first-writer-wins across ALL members, and `deposit` has no membership or
+    /// existence check while `challenge_id` is the app's sequential group id —
+    /// so anyone could deposit 1 stroop of a worthless self-issued token into
+    /// challenge N+1, N+2, ... before the real members arrived, permanently
+    /// pinning those challenges to junk. Every legitimate deposit then failed
+    /// with WrongToken, with no admin override and no way to reset. Per-member
+    /// keying preserves the actual invariant (one member's balance is in one
+    /// asset) while making the griefing self-inflicted only.
+    Token(u64, Address),
     /// (challenge_id, member) -> how much this member currently has escrowed.
     /// Increases on deposit, decreases on withdrawal. This is the ONLY record
     /// of ownership; there is no pool.
@@ -128,7 +138,7 @@ impl ChallengeContract {
         // The token is fixed by the first deposit. Without this, a later
         // deposit in a different token would be added to the same balance
         // figure, and a withdrawal could then pay out the wrong asset.
-        let token_key = DataKey::Token(challenge_id);
+        let token_key = DataKey::Token(challenge_id, member.clone());
         match storage.get::<DataKey, Address>(&token_key) {
             Some(existing) => {
                 if existing != token {
@@ -202,7 +212,7 @@ impl ChallengeContract {
         }
 
         let token: Address = storage
-            .get(&DataKey::Token(challenge_id))
+            .get(&DataKey::Token(challenge_id, member.clone()))
             .ok_or(Error::InsufficientBalance)?;
         let token_client = token::Client::new(&env, &token);
 
@@ -244,10 +254,12 @@ impl ChallengeContract {
             .unwrap_or(0)
     }
 
-    /// The token a challenge is denominated in, or None before its first
-    /// deposit. Read-only.
-    pub fn token_of(env: Env, challenge_id: u64) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::Token(challenge_id))
+    /// The token this member's savings in this challenge are denominated in, or
+    /// None before their first deposit. Read-only.
+    pub fn token_of(env: Env, challenge_id: u64, member: Address) -> Option<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Token(challenge_id, member))
     }
 
     // ------------------------------------------------------------------------
@@ -273,7 +285,7 @@ impl ChallengeContract {
     fn bump_ttl(env: &Env, challenge_id: u64, member: &Address) {
         let storage = env.storage().persistent();
         for key in [
-            DataKey::Token(challenge_id),
+            DataKey::Token(challenge_id, member.clone()),
             DataKey::Balance(challenge_id, member.clone()),
         ] {
             if storage.has(&key) {

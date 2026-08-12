@@ -414,43 +414,28 @@ export const wallet = {
 	},
 
 	/**
-	 * Per-asset: what Saji has actually paid this user, and how much of it they
-	 * have already withdrawn. Used to cap the "in your wallet" figure so the
-	 * withdraw screen never offers to send funds Saji didn't pay. Pure DB.
+	 * Per-asset: what Saji has actually paid this user, split by WHERE it is now.
+	 * Used to cap the "in your wallet" figure so the withdraw screen never offers
+	 * to send funds Saji didn't pay. Pure DB + a contract read per circle.
+	 *
+	 * `owed` and `released_total` are opposites — see the route's header before
+	 * using either.
 	 */
 	payoutSummary(): Promise<{
 		assets: {
 			asset_code: string;
 			paid_total: string;
-			withdrawn_total: string;
-			/** Paid but not yet withdrawn. */
+			/**
+			 * Claimed OUT of escrow — so it has reached the user's wallet, unless
+			 * they have since sent it elsewhere. Bound this against the live
+			 * wallet balance; it is not proof the funds are still there.
+			 */
+			released_total: string;
+			/** Still UNCLAIMED in the contract's escrow. */
 			owed: string;
 		}[];
 	}> {
 		return request("/api/wallet/payout-summary", { auth: true });
-	},
-
-	/** Build an unsigned withdrawal payment for the wallet to sign. */
-	withdraw(input: {
-		amount: string | number;
-		destination?: string;
-		asset_code?: string;
-	}): Promise<{
-		unsigned_xdr: string;
-		destination: string;
-		asset_code: string;
-		amount: string;
-	}> {
-		return request("/api/wallet/withdraw", { method: "POST", body: input, auth: true });
-	},
-
-	/** Broadcast the wallet-signed withdrawal. */
-	submitWithdraw(input: { signed_xdr: string }): Promise<Transaction> {
-		return request<Transaction>("/api/wallet/withdraw/submit", {
-			method: "POST",
-			body: input,
-			auth: true,
-		});
 	},
 
 	/**
@@ -471,7 +456,22 @@ export const wallet = {
 		});
 	},
 
-	history(input?: { per_page?: number; page?: number }): Promise<Paginated<Transaction>> {
+	history(input?: {
+		per_page?: number;
+		page?: number;
+	}): Promise<
+		Paginated<
+			Transaction & {
+				/**
+				 * Direction of the money. `type` reads "payout" for BOTH an incoming
+				 * circle payout and an outgoing withdrawal, so label from this.
+				 */
+				kind: Transaction["type"] | "withdrawal";
+				/** Decimal string, or null when the row has no resolvable amount. */
+				amount: string | null;
+			}
+		>
+	> {
 		return request("/api/wallet/history", { auth: true, query: input });
 	},
 };
@@ -540,6 +540,8 @@ export type Group = {
 	target_amount: string | null;
 	contribution_frequency: string;
 	current_cycle: number;
+	/** When the current cycle is due to settle, or null if not scheduled. */
+	next_payout_at?: string | null;
 	// On-chain group id (null until the group is created on the contract).
 	onchain_group_id?: number | null;
 	// Group rules/settings (present on show()/index() payloads).
@@ -551,9 +553,23 @@ export type Group = {
 	fee_bps?: number;
 	late_fee_bps?: number;
 	grace_period_hours?: number;
-	cycle_length_days?: number;
+	cycle_length_seconds?: number;
 	members_count?: number;
 	member_count?: number;
+	// Real per-cycle progress, present on index(). The card used to hardcode a
+	// zero here, so every group rendered "$0 / $0" with an empty bar.
+	/** Approved members only — pending requesters neither pay in nor receive. */
+	approved_count?: number;
+	/** The viewer's cumulative confirmed contributions, decimal string. */
+	you_paid_total?: string;
+	/** Whether the viewer has settled the current cycle. */
+	you_paid_this_cycle?: boolean;
+	/** Cycles in a full rotation — one turn per approved member. */
+	total_cycles?: number;
+	/** Commitment over the whole rotation: contribution × total_cycles. */
+	your_aim?: string;
+	/** A few real members for the avatar stack (max 4). */
+	member_avatars?: { name: string; avatar_url: string | null }[];
 	// Challenge (public circle) fields — present on /challenges items.
 	circle_kind?: string;
 	savings_target?: string | null;
@@ -614,10 +630,18 @@ export type GroupCircle = {
 	you_paid_this_cycle: boolean;
 	user_progress: { paid: string; aim: string; percent: number };
 	circle_progress: { cycles_done: number; cycles_total: number; percent: number };
+	/** Server-resolved from the contract; null when the RPC was unavailable. */
+	current_recipient_user_id: number | null;
 	payout_rotation: {
 		position: number;
 		user_id: number;
 		name: string | null;
+		/**
+		 * Null for OTHER members when the circle has `hide_balances` on — an
+		 * address exposes that person's whole external wallet, not just their
+		 * circle activity. Use `current_recipient_user_id` to label the rotation.
+		 */
+		stellar_address: string | null;
 		has_received_payout: boolean;
 		removed?: boolean;
 	}[];
@@ -631,9 +655,6 @@ export type GroupCircle = {
 	}[];
 };
 
-/** Result shape for endpoints that return a domain row + an unsigned tx. */
-type WithUnsignedXdr<T> = T & { unsigned_xdr: string | null };
-
 export type CreateGroupInput = {
 	name: string;
 	description?: string | null;
@@ -642,7 +663,7 @@ export type CreateGroupInput = {
 	contribution_amount: string | number;
 	target_amount?: string | number | null;
 	contribution_frequency: "daily" | "weekly" | "bi_weekly" | "monthly" | "custom";
-	cycle_length_days?: number;
+	cycle_length_seconds?: number;
 	fee_bps?: number;
 	late_fee_bps?: number;
 	grace_period_hours?: number;
@@ -658,7 +679,7 @@ export const groups = {
 		return request<Group[]>("/api/groups", { auth: true });
 	},
 
-	store(input: CreateGroupInput): Promise<{ group: Group; unsigned_xdr: string | null }> {
+	store(input: CreateGroupInput): Promise<{ group: Group }> {
 		return request("/api/groups", { method: "POST", body: input, auth: true });
 	},
 
@@ -701,7 +722,7 @@ export const groups = {
 		return request(`/api/groups/${id}/photo`, { method: "POST", form, auth: true });
 	},
 
-	approve(groupId: number, memberId: number): Promise<WithUnsignedXdr<{ member: GroupMember }>> {
+	approve(groupId: number, memberId: number): Promise<{ member: GroupMember }> {
 		return request(`/api/groups/${groupId}/members/${memberId}/approve`, {
 			method: "POST",
 			auth: true,
@@ -716,7 +737,7 @@ export const groups = {
 		});
 	},
 
-	setPayoutOrder(id: number, memberIds: number[]): Promise<WithUnsignedXdr<{ members: GroupMember[] }>> {
+	setPayoutOrder(id: number, memberIds: number[]): Promise<{ members: GroupMember[] }> {
 		return request(`/api/groups/${id}/payout-order`, {
 			method: "POST",
 			body: { member_ids: memberIds },
@@ -777,8 +798,14 @@ export const contributions = {
 		return request<Contribution[]>(`/api/groups/${groupId}/contributions`, { auth: true });
 	},
 
-	/** Record the current-cycle contribution; returns the unsigned contribute tx. */
-	store(groupId: number): Promise<WithUnsignedXdr<{ contribution: Contribution }>> {
+	/**
+	 * Record the intent to contribute for the current cycle.
+	 *
+	 * This does NOT move money and does NOT mark the contribution paid — the
+	 * member's wallet signs `contribute` on-chain via the contract bindings, and
+	 * the indexer flips the row to `confirmed` after reading the contract.
+	 */
+	store(groupId: number): Promise<{ contribution: Contribution }> {
 		return request(`/api/groups/${groupId}/contributions`, {
 			method: "POST",
 			auth: true,
@@ -921,6 +948,12 @@ export const transactions = {
 export type ActivityRow = {
 	id: number;
 	type: Transaction["type"];
+	/**
+	 * Direction of the money. `type` is `"payout"` for BOTH an incoming circle
+	 * payout and an outgoing withdrawal, so label from this instead: it is
+	 * `"withdrawal"` for money leaving, otherwise the same value as `type`.
+	 */
+	kind: Transaction["type"] | "withdrawal";
 	status: Transaction["status"];
 	group: GroupRef | null;
 	amount: string | null;
@@ -936,6 +969,72 @@ export const activity = {
 		page?: number;
 	}): Promise<Paginated<ActivityRow>> {
 		return request("/api/activity", { auth: true, query: input });
+	},
+};
+
+// ================================================================
+// notifications
+// ================================================================
+
+export type NotificationType =
+	| "join_requested"
+	| "join_approved"
+	| "contribution_confirmed"
+	| "payout_received"
+	| "withdrawal_sent"
+	| "circle_completed";
+
+export type NotificationRow = {
+	id: number;
+	type: NotificationType;
+	title: string;
+	body: string;
+	/** Relative in-app path to open, or null. */
+	href: string | null;
+	meta: Record<string, unknown> | null;
+	/** Null while unread. */
+	read_at: string | null;
+	created_at: string;
+};
+
+export const notifications = {
+	index(input?: {
+		unread?: boolean;
+		per_page?: number;
+		page?: number;
+	}): Promise<Paginated<NotificationRow> & { unread_count: number }> {
+		return request("/api/notifications", {
+			auth: true,
+			query: input && {
+				...input,
+				// Query values serialise as strings; the route parses "true"/"false".
+				unread: input.unread === undefined ? undefined : String(input.unread),
+			},
+		});
+	},
+
+	/** Mark specific notifications read, or all of them. */
+	markRead(
+		input: { ids: number[] } | { all: true },
+	): Promise<{ marked: number; unread_count: number }> {
+		return request("/api/notifications/read", {
+			method: "POST",
+			body: input,
+			auth: true,
+		});
+	},
+
+	/**
+	 * Short-lived Supabase JWT for the Realtime subscription.
+	 *
+	 * `enabled: false` means Realtime is not configured — callers must treat
+	 * that as "fall back to refreshing on focus", not as an error.
+	 */
+	realtimeToken(): Promise<
+		| { enabled: false }
+		| { enabled: true; token: string; user_id: string; expires_in: number }
+	> {
+		return request("/api/notifications/realtime-token", { auth: true });
 	},
 };
 

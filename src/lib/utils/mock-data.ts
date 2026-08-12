@@ -16,9 +16,20 @@ export interface CircleGroup {
 	current: number;
 	target: number;
 	status: "PAID" | "PENDING" | "OVERDUE";
-	nextPayoutDate: string; // e.g. "Oct 24"
+	/**
+	 * When the next contribution is due ("Oct 24"), or "—".
+	 *
+	 * The cycle BOUNDARY, not a payout date — a cycle settles as soon as
+	 * everyone has funded it, which is often earlier.
+	 */
+	nextDepositDate: string;
 	memberCount: number;
-	memberAvatarsImage: string; // stacked avatars image
+	/**
+	 * Real members for the avatar stack, newest mapping first. Empty when the
+	 * payload doesn't carry them (e.g. the join preview), in which case the card
+	 * falls back to initials rather than to stock faces.
+	 */
+	memberAvatars?: { name: string; avatar_url: string | null }[];
 	groupType: string; // e.g. "Rotating" | "Fixed"
 	payoutOrder: string; // e.g. "Randomized" | "Sequential"
 	frequency: string; // e.g. "Monthly" | "Weekly" | "Daily"

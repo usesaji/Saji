@@ -9,12 +9,10 @@ import { prisma, withTransaction } from "@/server/db";
 import { requireUser, generateInviteToken } from "@/server/auth";
 import { handle, json, parseBody } from "@/server/http";
 import {
-	LATE_PENALTY_VARIANT,
-	PAYOUT_ORDER_VARIANT,
+	MAX_CYCLE_SECONDS,
+	MIN_CYCLE_SECONDS,
 	cycleLengthFromFrequency,
-	tokenSac,
 } from "@/server/groups";
-import { buildCreateGroupTx, toStroops } from "@/server/stellar/service";
 import { serializeGroupWithCount, serializeGroup } from "@/server/serializers";
 
 /** Groups the authenticated user organizes or belongs to. */
@@ -29,12 +27,88 @@ export async function GET(request: Request) {
 					{ members: { some: { userId: user.id } } },
 				],
 			},
-			include: { _count: { select: { members: true } } },
+			include: {
+				_count: { select: { members: true } },
+				// A few real faces for the card's avatar stack. The card used to
+				// render a single static PNG with four strangers and "+12" baked
+				// into the image, which contradicted the member count printed
+				// directly beneath it.
+				members: {
+					where: { status: "approved" },
+					orderBy: { payoutPosition: "asc" },
+					take: 4,
+					select: { user: { select: { name: true, avatarUrl: true } } },
+				},
+			},
 			orderBy: { createdAt: "desc" },
 		});
 
+		// Two grouped queries for ALL the cards at once, rather than a pair per
+		// card. Skipped entirely when the user has no groups — an empty `OR` is
+		// an unnecessary round trip and a needless edge case.
+		const ids = groups.map((group) => group.id);
+
+		const [collected, approved, paidThisCycle] = ids.length
+			? await Promise.all([
+					// THE VIEWER's cumulative confirmed contributions per group.
+					//
+					// Matches `user_progress.paid` on the circle detail page, so the
+					// card and the page it opens can never disagree. CONFIRMED only:
+					// a pending row is an intent, and counting it would show savings
+					// the chain has never seen.
+					prisma.contribution.groupBy({
+						by: ["groupId"],
+						where: { status: "confirmed", userId: user.id, groupId: { in: ids } },
+						_sum: { amount: true },
+					}),
+					// APPROVED members, which is what sizes the pot — pending
+					// requesters owe nothing and receive nothing. Counted separately
+					// from `_count.members` (every status) because the two answer
+					// different questions, and from the `members` relation above,
+					// which is capped at 4 for avatars and is not a count at all.
+					prisma.groupMember.groupBy({
+						by: ["groupId"],
+						where: { status: "approved", groupId: { in: ids } },
+						_count: { _all: true },
+					}),
+					// Which groups the viewer has already paid for THIS cycle —
+					// what the PAID/PENDING badge actually means to a member.
+					prisma.contribution.findMany({
+						where: {
+							status: "confirmed",
+							userId: user.id,
+							OR: groups.map((group) => ({
+								groupId: group.id,
+								cycle: group.currentCycle,
+							})),
+						},
+						select: { groupId: true },
+					}),
+				])
+			: [[], [], []];
+
+		const paidByGroup = new Map(
+			collected.map((row) => [row.groupId, row._sum.amount?.toString() ?? "0"]),
+		);
+		const approvedByGroup = new Map(
+			approved.map((row) => [row.groupId, row._count._all]),
+		);
+		const settledThisCycle = new Set(
+			paidThisCycle.map((row) => row.groupId.toString()),
+		);
+
 		return json(
-			groups.map((group) => serializeGroupWithCount(group, group._count.members)),
+			groups.map((group) =>
+				serializeGroupWithCount(group, group._count.members, {
+					youPaidTotal: paidByGroup.get(group.id) ?? "0",
+					youPaidThisCycle: settledThisCycle.has(group.id.toString()),
+					approvedCount: approvedByGroup.get(group.id) ?? 0,
+					memberAvatars: group.members.map((member) => ({
+						name: member.user.name,
+						avatar_url: member.user.avatarUrl,
+					})),
+				}),
+			),
 		);
 	});
 }
@@ -57,13 +131,27 @@ const createSchema = z
 		contribution_amount: z.union([decimal, z.number().positive()]),
 		target_amount: z.union([decimal, z.number().positive()]).nullish(),
 		contribution_frequency: z.enum([
+			"hourly",
+			"six_hourly",
 			"daily",
+			"two_daily",
 			"weekly",
 			"bi_weekly",
 			"monthly",
+			"quarterly",
+			"yearly",
 			"custom",
 		]),
-		cycle_length_days: z.number().int().min(1).max(365).nullish(),
+		// SECONDS, matching the contract. Bounds mirror the contract's own
+		// MIN_CYCLE_LENGTH/MAX_CYCLE_LENGTH so an out-of-range value is rejected
+		// here with a field error instead of reverting on-chain after the user
+		// has already signed.
+		cycle_length_seconds: z
+			.number()
+			.int()
+			.min(MIN_CYCLE_SECONDS)
+			.max(MAX_CYCLE_SECONDS)
+			.nullish(),
 		fee_bps: z.number().int().min(0).max(10000).nullish(),
 		late_fee_bps: z.number().int().min(0).max(10000).nullish(),
 		grace_period_hours: z.number().int().min(0).max(8760).nullish(),
@@ -76,10 +164,11 @@ const createSchema = z
 	// Laravel's `required_if:contribution_frequency,custom`.
 	.refine(
 		(data) =>
-			data.contribution_frequency !== "custom" || data.cycle_length_days != null,
+			data.contribution_frequency !== "custom" ||
+			data.cycle_length_seconds != null,
 		{
 			message: "Cycle length is required for a custom frequency.",
-			path: ["cycle_length_days"],
+			path: ["cycle_length_seconds"],
 		},
 	);
 
@@ -95,9 +184,9 @@ export async function POST(request: Request) {
 		const user = await requireUser(request);
 		const data = await parseBody(request, createSchema);
 
-		const cycleLengthDays = cycleLengthFromFrequency(
+		const cycleLengthSeconds = cycleLengthFromFrequency(
 			data.contribution_frequency,
-			data.cycle_length_days,
+			data.cycle_length_seconds,
 		);
 
 		const group = await withTransaction(async (tx) => {
@@ -111,7 +200,7 @@ export async function POST(request: Request) {
 					contributionAmount: String(data.contribution_amount),
 					targetAmount:
 						data.target_amount != null ? String(data.target_amount) : null,
-					cycleLengthDays,
+					cycleLengthSeconds,
 					contributionFrequency: data.contribution_frequency,
 					feeBps: data.fee_bps ?? 0,
 					lateFeeBps: data.late_fee_bps ?? 0,
@@ -140,35 +229,19 @@ export async function POST(request: Request) {
 			return created;
 		});
 
-		// Non-custodial: we cannot create the group on-chain ourselves — the
-		// organizer's wallet must sign. Build the unsigned tx if we can.
+		// Non-custodial: the group is created on-chain by the ORGANIZER'S WALLET,
+		// in the browser, via the generated contract bindings — then reported back
+		// with PATCH .../onchain. This route is the off-chain half only.
 		//
-		// Best-effort by design: the frontend now creates the group on-chain
-		// directly via the contract bindings and reports the id back via
-		// PATCH .../onchain, so this XDR is a convenience. An RPC failure must
-		// never 500 the create — the DB row still has to be returned.
-		let unsignedXdr: string | null = null;
-		const token = tokenSac(group);
-
-		if (user.stellarAddress && token) {
-			try {
-				unsignedXdr = await buildCreateGroupTx({
-					organizer: user.stellarAddress,
-					token,
-					contributionAmount: toStroops(String(data.contribution_amount)),
-					cycleLengthDays,
-					feeBps: data.fee_bps ?? 0,
-					lateFeeBps: data.late_fee_bps ?? 0,
-					gracePeriodHours: data.grace_period_hours ?? 0,
-					payoutOrder: PAYOUT_ORDER_VARIANT[data.payout_order ?? "manual"],
-					latePenalty:
-						LATE_PENALTY_VARIANT[data.late_penalty ?? "deduct_from_balance"],
-				});
-			} catch (error) {
-				console.warn("[groups] could not build create_group XDR:", error);
-			}
-		}
-
-		return json({ group: serializeGroup(group), unsigned_xdr: unsignedXdr }, 201);
+		// It used to also build an unsigned create_group XDR here as a
+		// "convenience". Nothing ever consumed it: two RPC round trips
+		// (getAccount + prepareTransaction) on the critical path of every group
+		// creation, discarded on arrival. Worse, being unexercised it had drifted
+		// out of agreement with the contract — it passed cycle length in DAYS and
+		// grace period in HOURS as u32, where the contract takes SECONDS as u64 —
+		// so had anything started using it, it would have failed. Two encodings of
+		// one contract interface is how that happens; there is now one, in
+		// `src/lib/hooks/useSavingsContract.ts`.
+		return json({ group: serializeGroup(group) }, 201);
 	});
 }

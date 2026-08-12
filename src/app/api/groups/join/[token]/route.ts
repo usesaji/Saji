@@ -13,6 +13,8 @@ import { prisma } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json, notFound } from "@/server/http";
 import { serializeMember } from "@/server/serializers";
+import { emitAfterResponse } from "@/server/notifications";
+import { publicFileUrl } from "@/server/storage";
 
 /**
  * Public-ish preview of what the invite leads to.
@@ -42,7 +44,7 @@ export async function GET(
 			id: group.id,
 			name: group.name,
 			description: group.description,
-			photo_url: group.photoUrl,
+			photo_url: publicFileUrl(group.photoUrl),
 			target_amount: group.targetAmount,
 			member_count: group._count.members,
 			settings: {
@@ -97,6 +99,26 @@ export async function POST(
 				: await prisma.groupMember.create({
 						data: { groupId: group.id, userId: user.id, status: "pending" },
 					});
+
+			// Tell the ORGANIZER, not the joiner — the joiner just performed this
+			// action and already sees the result. A pending request needs the
+			// organizer to act, which is exactly the case that used to sit unseen
+			// until they happened to open the group.
+			emitAfterResponse({
+				userId: group.organizerId,
+				type: "join_requested",
+				dedupeKey: `join_requested:${member.id}`,
+				title: member.status === "approved"
+					? `${user.name} joined ${group.name}`
+					: `${user.name} wants to join ${group.name}`,
+				body: member.status === "approved"
+					? `${user.name} joined "${group.name}" through your invite link.`
+					: `${user.name} asked to join "${group.name}". Approve or decline them from the group's requests page.`,
+				href: member.status === "approved"
+					? `/groups/${group.id}`
+					: `/groups/${group.id}/requests`,
+				meta: { group_id: String(group.id), group_name: group.name },
+			});
 
 			return json(serializeMember(member), 201);
 		} catch (error) {

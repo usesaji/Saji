@@ -11,7 +11,14 @@
 import { z } from "zod";
 import { withTransaction } from "@/server/db";
 import { createToken, hashPassword, hashSignupToken } from "@/server/auth";
-import { handle, json, parseBody, validationError } from "@/server/http";
+import {
+	clientIp,
+	handle,
+	json,
+	parseBody,
+	rateLimit,
+	validationError,
+} from "@/server/http";
 import { publicUser } from "@/server/serializers";
 
 const schema = z
@@ -40,6 +47,11 @@ const schema = z
 
 export async function POST(request: Request) {
 	return handle(async () => {
+		// `register/start` and `verify-otp` were both throttled; the step that
+		// actually CREATES the account was not, leaving the only unthrottled
+		// write in the signup chain.
+		await rateLimit(`signup-complete:${clientIp(request)}`, 6, 60);
+
 		const data = await parseBody(request, schema);
 
 		const user = await withTransaction(async (tx) => {

@@ -16,6 +16,7 @@
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { prisma } from "./db";
+import { pruneRateLimits } from "./http";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -71,6 +72,19 @@ export function frontendUrl(request: Request, path: string): string {
 		.split(",")
 		.map((s) => s.trim())
 		.filter(Boolean)[0];
+
+	// Falling back to the request's own origin means trusting the Host header.
+	// The OAuth success redirect carries the single-use handoff code, so a
+	// spoofed Host behind a proxy that does not pin it sends that code — and the
+	// session it redeems for — to an attacker's origin. In production this must
+	// be configured; refusing to start is better than silently redirecting
+	// somewhere unintended.
+	if (!configured && process.env.NODE_ENV === "production") {
+		throw new Error(
+			"FRONTEND_URL is not set. It is required in production: the OAuth " +
+				"redirect base must not be derived from the request's Host header.",
+		);
+	}
 
 	const base = configured ?? new URL(request.url).origin;
 
@@ -243,14 +257,21 @@ export async function exchangeCode(
 
 const HANDOFF_TTL_MS = 30_000;
 
-/** Mint a one-time code that redeems for `token` exactly once, within 30s. */
-export async function createHandoffCode(token: string): Promise<string> {
+/**
+ * Mint a one-time code that redeems for a session for `userId`, within 30s.
+ *
+ * Takes a USER, not a token. The row used to carry the real 30-day bearer token
+ * in plaintext, so the table was a list of live credentials sitting next to a
+ * carefully-hashed code. The token cannot be hashed (it has to be handed back),
+ * so it is no longer stored — `redeemHandoffCode` mints a fresh one instead.
+ */
+export async function createHandoffCode(userId: bigint): Promise<string> {
 	const code = randomBytes(32).toString("hex");
 
 	await prisma.oauthHandoff.create({
 		data: {
 			codeHash: hashHandoffCode(code),
-			token,
+			userId,
 			expiresAt: new Date(Date.now() + HANDOFF_TTL_MS),
 		},
 	});
@@ -267,7 +288,7 @@ function hashHandoffCode(code: string): string {
  * the code is unknown, already used, or expired. Single-use: the row is
  * deleted whether or not it was valid, so a code can never be replayed.
  */
-export async function redeemHandoffCode(code: string): Promise<string | null> {
+export async function redeemHandoffCode(code: string): Promise<bigint | null> {
 	const codeHash = hashHandoffCode(code);
 
 	// Delete-and-return in one round trip: two concurrent redemption attempts
@@ -279,5 +300,30 @@ export async function redeemHandoffCode(code: string): Promise<string | null> {
 		.catch(() => null);
 
 	if (!deleted || deleted.expiresAt < new Date()) return null;
-	return deleted.token;
+	return deleted.userId;
+}
+
+/**
+ * Delete lapsed handoff rows and rate-limit buckets.
+ *
+ * Neither table had a cleaner. Handoff codes live 30 seconds, but a row is only
+ * removed when it is REDEEMED — so every abandoned sign-in (closed tab, dropped
+ * network) left one behind permanently. The `@@index([expiresAt])` was clearly
+ * added for a sweeper that was never written.
+ */
+export async function sweepExpired(): Promise<{
+	expired_handoffs_swept: number;
+	expired_rate_limits_swept: number;
+}> {
+	const now = new Date();
+
+	const [handoffs, rateLimits] = await Promise.all([
+		prisma.oauthHandoff.deleteMany({ where: { expiresAt: { lt: now } } }),
+		pruneRateLimits(),
+	]);
+
+	return {
+		expired_handoffs_swept: handoffs.count,
+		expired_rate_limits_swept: rateLimits,
+	};
 }

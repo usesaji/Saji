@@ -4,7 +4,7 @@
  * Ported from `WithdrawInfoController::update` and `::destroy`.
  */
 
-import { prisma, withTransaction } from "@/server/db";
+import { withTransaction } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { handle, json, parseBody } from "@/server/http";
 import { findDestinationOr404 } from "@/server/withdraw-info";
@@ -21,7 +21,13 @@ export async function PATCH(
 		const { id } = await params;
 
 		const existing = await findDestinationOr404(id, user.id);
-		const data = await parseBody(request, destinationSchema);
+		// PARTIAL. Reusing the full create schema meant `stellar_address` was
+		// required and every omitted optional was written as its default — so a
+		// PATCH sending only `{ stellar_address }` silently ERASED the memo,
+		// memo type and label. For an exchange destination that requires a memo,
+		// that turns a working payout target into one that loses funds on the
+		// receiving side.
+		const data = await parseBody(request, destinationSchema.partial());
 
 		const updated = await withTransaction(async (tx) => {
 			if (data.is_primary && !existing.isPrimary) {
@@ -33,11 +39,20 @@ export async function PATCH(
 
 			return tx.withdrawInfo.update({
 				where: { id: existing.id },
+				// Only fields actually present in the request are written;
+				// `undefined` means "not supplied", which is distinct from an
+				// explicit null meaning "clear it".
 				data: {
-					stellarAddress: data.stellar_address,
-					memo: data.memo ?? null,
-					memoType: data.memo_type ?? "none",
-					destinationLabel: data.destination_label ?? null,
+					...(data.stellar_address !== undefined && {
+						stellarAddress: data.stellar_address,
+					}),
+					...(data.memo !== undefined && { memo: data.memo ?? null }),
+					...(data.memo_type !== undefined && {
+						memoType: data.memo_type ?? "none",
+					}),
+					...(data.destination_label !== undefined && {
+						destinationLabel: data.destination_label ?? null,
+					}),
 					isPrimary: data.is_primary ?? existing.isPrimary,
 				},
 			});

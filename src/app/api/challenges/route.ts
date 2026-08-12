@@ -99,7 +99,7 @@ export async function POST(request: Request) {
 					// non-null. Harmless defaults, so a challenge never carries
 					// rotating semantics by accident.
 					contributionAmount: "0",
-					cycleLengthDays: 1,
+					cycleLengthSeconds: 86_400,
 					contributionFrequency: "custom",
 					circleKind: "challenge",
 					groupType: "public",

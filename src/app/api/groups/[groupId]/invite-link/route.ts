@@ -47,3 +47,49 @@ export async function GET(
 		});
 	});
 }
+
+/**
+ * Regenerate the invite token, invalidating every link already shared.
+ *
+ * A private circle's ONLY gate is the secrecy of its link, and until now that
+ * link could never be withdrawn: forwarded into a group chat, screenshotted or
+ * pasted anywhere, it kept working forever, and anyone holding it could join as
+ * `pending`. There was no expiry and no use limit either, so rotation is the
+ * only revocation this design can offer.
+ *
+ * Existing members are unaffected — this invalidates the door, not the people
+ * already through it.
+ */
+export async function POST(
+	request: Request,
+	{ params }: { params: Promise<{ groupId: string }> },
+) {
+	return handle(async () => {
+		const user = await requireUser(request);
+		const { groupId } = await params;
+
+		const group = await findGroupOr404(groupId);
+
+		if (group.organizerId !== user.id) {
+			throw forbidden("Only the organizer can regenerate the invite link.");
+		}
+
+		const token = generateInviteToken();
+
+		await prisma.group.update({
+			where: { id: group.id },
+			data: { inviteToken: token },
+		});
+
+		const frontend = (process.env.FRONTEND_URL ?? "")
+			.split(",")[0]
+			.trim()
+			.replace(/\/$/, "");
+
+		return json({
+			invite_token: token,
+			invite_url: frontend ? `${frontend}/groups/join/${token}` : null,
+			message: "Previous links no longer work.",
+		});
+	});
+}

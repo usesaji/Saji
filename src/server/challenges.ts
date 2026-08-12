@@ -148,7 +148,15 @@ export async function reconcileChallengeDeposits(groupId: bigint): Promise<numbe
 
 		for (const deposit of deposits) {
 			const claimed = toStroops(deposit.amount.toString());
-			if (claimed > remaining) break; // Oldest-first: stop at the first gap.
+
+			// SKIP, don't stop. `amount` is client-asserted (only its format is
+			// validated), so a single inflated row can exceed the member's real
+			// on-chain balance forever. `break` made that row a permanent plug:
+			// every later legitimate deposit behind it stayed pending on every
+			// future sweep, recoverable only by editing the database. Skipping
+			// lets the honest rows through and leaves the bad one pending, which
+			// is where an unverifiable claim belongs.
+			if (claimed > remaining) continue;
 
 			// Guarded by `status: "pending"` in the WHERE clause, not just the
 			// id: this indexer sweep can overlap with itself (the cron tick and

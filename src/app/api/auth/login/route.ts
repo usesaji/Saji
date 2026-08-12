@@ -27,8 +27,14 @@ const schema = z.object({
 });
 
 /**
- * One message for both "no such user" and "wrong password", so login cannot be
- * used to discover which addresses are registered.
+ * ONE message for every failure — no such user, wrong password, or locked out.
+ *
+ * The lockout used to answer with its own distinct message, which turned it
+ * into an account-enumeration oracle: five wrong guesses against an unknown
+ * address told you whether it was registered. That is exactly the leak
+ * `register/start` is carefully shaped to avoid, reopened on the next screen.
+ * A locked-out user learns nothing here, but they are not the audience — the
+ * probe is.
  */
 function rejectCredentials(): never {
 	throw validationError({
@@ -38,7 +44,7 @@ function rejectCredentials(): never {
 
 export async function POST(request: Request) {
 	return handle(async () => {
-		rateLimit(`login:${clientIp(request)}`, 6, 60);
+		await rateLimit(`login:${clientIp(request)}`, 6, 60);
 
 		const data = await parseBody(request, schema);
 

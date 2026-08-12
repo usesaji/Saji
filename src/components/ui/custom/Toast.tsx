@@ -47,12 +47,20 @@ export default function Toast() {
 					transition={{
 						duration: 0.25,
 					}}
-					className="fixed top-8 right-0 z-50 w-full max-w-110 px-4 sm:px-8"
+					className="fixed top-8 right-0 z-1100 w-full max-w-110 px-4 sm:px-8"
 				>
 					<div
+						// `alert` + assertive for errors so failures interrupt; the
+						// rest are polite status updates.
+						role={variant === "error" ? "alert" : "status"}
+						aria-live={variant === "error" ? "assertive" : "polite"}
 						className={`relative ${current.bg} p-5 rounded-[15px] w-full border-[0.3px] border-[#A7A7A74D] backdrop-blur-[14.2px]`}
 					>
-						<button onClick={close} className={`absolute top-3 right-3.5`}>
+						<button
+							onClick={close}
+							aria-label="Dismiss notification"
+							className={`absolute top-3 right-3.5`}
+						>
 							<IoClose />
 						</button>
 

@@ -93,7 +93,16 @@ const InputField: React.FC<InputProps> = ({
 				)}
 			</div>
 
-			{/* {error && <p className="text-xs text-red-600">{error}</p>} */}
+			{/* Was commented out, so `error` only recoloured the border and the
+			    message itself was never shown. Every non-RHF form in the app
+			    (profile edit, security, withdraw destinations, create-group)
+			    passes server-side field errors here — all of them rendered a
+			    pink outline with no explanation of what was wrong. */}
+			{error && (
+				<p className="mt-1 text-xs text-error-500" role="alert">
+					{error}
+				</p>
+			)}
 		</div>
 	);
 };

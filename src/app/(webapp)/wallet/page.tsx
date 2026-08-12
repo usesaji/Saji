@@ -50,12 +50,16 @@ export default function Page() {
 				</div>
 			)}
 
+			{/* OUTSIDE the dashboard gate on purpose. This card owns its own
+			    loading and error states and reads the chain independently, but it
+			    used to render only when the DASHBOARD request had resolved — so a
+			    slow or failing dashboard took the balance AND the only Withdraw
+			    button off the page entirely, with nothing explaining why. */}
+			<SajiBalanceCard balance={saji} />
+
 			{data && !loading && (
 				<>
 					<SavingsSummaryCard data={data} />
-
-					{/* What the user can actually withdraw, and the only Withdraw CTA. */}
-					<SajiBalanceCard balance={saji} />
 
 					{/* Wallet link status (non-custodial). */}
 					<section className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[#f7f7f7] p-4 md:p-6">
@@ -89,8 +93,15 @@ export default function Page() {
 											className="flex items-center justify-between rounded-xl bg-[#f8f8f8] px-4 py-3 transition-colors hover:bg-[#f0f0f0]"
 										>
 											<div>
+												{/* `kind`, not `type` — the latter reads "payout"
+												    for money LEAVING as well as arriving. */}
 												<p className="text-sm font-medium capitalize">
-													{tx.type.replace("_", " ")}
+													{tx.kind.replace("_", " ")}
+													{tx.amount && (
+														<span className="ml-2 font-light text-muted-foreground">
+															{tx.amount}
+														</span>
+													)}
 												</p>
 												<p className="text-xs text-muted-foreground">
 													{new Date(tx.created_at).toLocaleString()}

@@ -18,7 +18,6 @@ import { prisma, withTransaction } from "@/server/db";
 import { requireUser } from "@/server/auth";
 import { HttpError, handle, json, parseBody } from "@/server/http";
 import { assertOrganizer, findGroupOr404 } from "@/server/groups";
-import { buildSetPayoutOrderTx } from "@/server/stellar/service";
 import { serializeMember } from "@/server/serializers";
 
 const schema = z.object({
@@ -90,41 +89,10 @@ export async function POST(
 			}
 		});
 
-		// Build the on-chain reorder for a Manual group that is live on-chain.
-		let unsignedXdr: string | null = null;
-
-		if (
-			group.payoutOrder === "manual" &&
-			user.stellarAddress &&
-			group.onchainGroupId !== null
-		) {
-			const members = await prisma.groupMember.findMany({
-				where: { groupId: group.id, userId: { in: submitted } },
-				include: { user: { select: { stellarAddress: true } } },
-				orderBy: { payoutPosition: "asc" },
-			});
-
-			const addresses = members
-				.map((m) => m.user.stellarAddress)
-				.filter((a): a is string => Boolean(a));
-
-			// Only build if EVERY member has a linked wallet — a partial
-			// permutation would be rejected on-chain.
-			if (addresses.length === submitted.length) {
-				try {
-					unsignedXdr = await buildSetPayoutOrderTx(
-						user.stellarAddress,
-						group.onchainGroupId,
-						addresses,
-					);
-				} catch (error) {
-					// Non-fatal: the frontend signs set_payout_order directly via
-					// the contract bindings. Still return the saved positions.
-					console.warn("[groups] could not build set_payout_order:", error);
-				}
-			}
-		}
-
+		// The on-chain reorder itself is signed by the organizer's wallet through
+		// the contract bindings (`useSavingsContract().setPayoutOrder`); this route
+		// persists the off-chain positions. The unsigned set_payout_order XDR built
+		// here previously had no consumer — see the note in `POST /api/groups`.
 		const ordered = await prisma.groupMember.findMany({
 			where: { groupId: group.id },
 			include: {
@@ -141,9 +109,6 @@ export async function POST(
 			orderBy: { payoutPosition: "asc" },
 		});
 
-		return json({
-			members: ordered.map(serializeMember),
-			unsigned_xdr: unsignedXdr,
-		});
+		return json({ members: ordered.map(serializeMember) });
 	});
 }
