@@ -20,16 +20,35 @@ const patterns: Pattern[] = [
 // This is NOT the S3 endpoint — `<account>.r2.cloudflarestorage.com` requires a
 // SigV4 signature on every request and will 401 the image optimizer.
 try {
-  const r2 = new URL(process.env.NEXT_PUBLIC_R2_PUBLIC_URL ?? "");
-  patterns.push({
-    protocol: r2.protocol.replace(":", "") as "http" | "https",
-    hostname: r2.hostname,
-    // URL.port is "" for a default-port URL, which is exactly what
-    // remotePatterns wants. Omitting `port` entirely would imply the `**`
-    // wildcard and allow ANY port on that host.
-    port: r2.port,
-    pathname: "/**",
-  });
+  const raw = process.env.NEXT_PUBLIC_R2_PUBLIC_URL ?? "";
+  const r2 = new URL(raw);
+  const protocol = r2.protocol.replace(":", "");
+
+  // `new URL()` accepts ANY scheme — "ttps://…" parses happily — so the
+  // constructor is not the validation it looks like. Check the scheme
+  // explicitly. Without this the bad value reached `remotePatterns`, where
+  // Next's own config schema rejected it and killed the BUILD with
+  // "Expected 'http' | 'https', received 'ttps'" — a message that names
+  // neither the variable nor the deployment that set it. A dropped leading
+  // character while copying a URL into a dashboard is an easy mistake; taking
+  // down the build over it is not a proportionate response.
+  if (protocol !== "http" && protocol !== "https") {
+    console.warn(
+      `[next.config] NEXT_PUBLIC_R2_PUBLIC_URL has protocol "${protocol}" ` +
+        `(from "${raw}"). Expected http or https — check for a typo. ` +
+        `Uploaded images will not render until this is fixed.`,
+    );
+  } else {
+    patterns.push({
+      protocol,
+      hostname: r2.hostname,
+      // URL.port is "" for a default-port URL, which is exactly what
+      // remotePatterns wants. Omitting `port` entirely would imply the `**`
+      // wildcard and allow ANY port on that host.
+      port: r2.port,
+      pathname: "/**",
+    });
+  }
 } catch {
   /* unset or invalid — uploads simply won't render until it's configured */
 }

@@ -77,6 +77,18 @@ function createClient(): PrismaClient {
 			// just to hand over a connection from this network, so 10s leaves
 			// very little headroom on a cold pool.
 			connectionTimeoutMillis: 20_000,
+			// THE IMPORTANT ONE. node-postgres defaults `max` to 10, and
+			// Supavisor's SESSION mode allows this project 15 clients IN TOTAL —
+			// across every process that connects. So a single Prisma client can
+			// claim two thirds of the budget on its own, and a laptop running
+			// `next dev` alongside one warm Vercel lambda already asks for 20 and
+			// gets `(EMAXCONNSESSION) max clients reached in session mode`.
+			//
+			// 3 lets roughly five instances coexist within the 15. It does not
+			// fix the underlying design — see the note above about why the
+			// runtime is on the session connection at all — it just stops one
+			// instance from starving every other one.
+			max: 3,
 		}),
 		log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
 		transactionOptions: {
