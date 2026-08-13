@@ -30,22 +30,83 @@ import {
 // user's wallet is on — a mismatch produces signatures the network rejects.
 export const NETWORK_PASSPHRASE = NETWORK_PASSPHRASE_FOR_NETWORK;
 
-let initialized = false;
+/**
+ * WalletConnect project id (free, from cloud.reown.com).
+ *
+ * WHY THIS MATTERS FOR MOBILE. Every other module registered below is a browser
+ * EXTENSION, and mobile browsers have no extensions — so on a phone the wallet
+ * picker is effectively empty. Freighter is the sharpest case: its module
+ * detects Freighter's mobile build and returns false on purpose, with the
+ * comment "we need to use WalletConnect instead". WalletConnect is the deep-link
+ * bridge to the Freighter/LOBSTR phone APPS, and without it mobile cannot
+ * connect at all.
+ *
+ * Optional. Unset, the kit behaves exactly as it did before — desktop
+ * extensions keep working and mobile keeps failing, rather than throwing at
+ * module load over a missing id.
+ */
+const WALLETCONNECT_PROJECT_ID =
+	process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? "";
 
-/** Initialize the kit once, on first use. */
-function ensureInit(): void {
-	if (initialized) return;
-	StellarWalletsKit.init({
-		network: IS_MAINNET ? Networks.PUBLIC : Networks.TESTNET,
-		modules: [
+/**
+ * In flight or completed init. A promise rather than a boolean because init is
+ * now async (the WalletConnect module is imported on demand) and two components
+ * can call in before the first one finishes — without this they would race and
+ * init the kit twice.
+ */
+let initPromise: Promise<void> | null = null;
+
+async function ensureInit(): Promise<void> {
+	initPromise ??= (async () => {
+		const modules = [
 			new FreighterModule(),
 			new AlbedoModule(),
 			new xBullModule(),
 			new LobstrModule(),
 			new HanaModule(),
-		],
-	});
-	initialized = true;
+		];
+
+		if (WALLETCONNECT_PROJECT_ID) {
+			// Imported HERE, not at the top of the file: it pulls in
+			// @reown/appkit and @walletconnect/sign-client, which are large. A
+			// static import would ship them to every visitor even when
+			// WalletConnect is not configured.
+			const { WalletConnectModule, WalletConnectTargetChain } = await import(
+				"@creit.tech/stellar-wallets-kit/modules/wallet-connect"
+			);
+
+			modules.push(
+				new WalletConnectModule({
+					projectId: WALLETCONNECT_PROJECT_ID,
+					// Shown in the wallet app's approval prompt. `url` is derived
+					// from the live origin rather than hardcoded: WalletConnect
+					// warns on a metadata/origin mismatch, and hardcoding the
+					// production domain would trip that on localhost.
+					metadata: {
+						name: "Saji",
+						description: "Community savings on Stellar",
+						url: window.location.origin,
+						icons: [`${window.location.origin}/images/link-preview.png`],
+					},
+					// Offer only the chain we are actually on. Advertising both
+					// lets a wallet negotiate the wrong one and produce signatures
+					// this network rejects.
+					allowedChains: [
+						IS_MAINNET
+							? WalletConnectTargetChain.PUBLIC
+							: WalletConnectTargetChain.TESTNET,
+					],
+				}),
+			);
+		}
+
+		StellarWalletsKit.init({
+			network: IS_MAINNET ? Networks.PUBLIC : Networks.TESTNET,
+			modules,
+		});
+	})();
+
+	return initPromise;
 }
 
 /**
@@ -53,14 +114,14 @@ function ensureInit(): void {
  * The modal handles wallet selection + connection in one step.
  */
 export async function connectWallet(): Promise<string> {
-	ensureInit();
+	await ensureInit();
 	const { address } = await StellarWalletsKit.authModal();
 	return address;
 }
 
 /** The currently connected address, or null if none. */
 export async function currentAddress(): Promise<string | null> {
-	ensureInit();
+	await ensureInit();
 	try {
 		const { address } = await StellarWalletsKit.getAddress();
 		return address || null;
@@ -71,7 +132,7 @@ export async function currentAddress(): Promise<string | null> {
 
 /** Disconnect the active wallet. */
 export async function disconnectWallet(): Promise<void> {
-	ensureInit();
+	await ensureInit();
 	try {
 		await StellarWalletsKit.disconnect();
 	} catch {
@@ -84,7 +145,7 @@ export async function disconnectWallet(): Promise<void> {
  * signed envelope XDR (base64). The caller posts this back to a submit endpoint.
  */
 export async function signXdr(unsignedXdr: string): Promise<string> {
-	ensureInit();
+	await ensureInit();
 	const { signedTxXdr } = await StellarWalletsKit.signTransaction(unsignedXdr, {
 		networkPassphrase: NETWORK_PASSPHRASE,
 	});
