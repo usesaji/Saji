@@ -239,9 +239,24 @@ export default function GroupPreviewPage() {
 		setStarting(true);
 		try {
 			await startCycleOnchain(data.onchain_group_id!);
-			// Sync the DB status to active (no indexer yet).
-			await groupsApi.activate(data.id).catch(() => {});
-			toast.success("The cycle is live — members can contribute now.", "Cycle started");
+			// Sync the DB status to active. This independently re-reads the chain,
+			// so a failure here just means our records haven't caught up — the
+			// cycle is already live on-chain either way. Surface that distinction
+			// so the organizer isn't left wondering why members still see it as
+			// not-yet-active.
+			let synced = true;
+			await groupsApi.activate(data.id).catch(() => {
+				synced = false;
+			});
+
+			if (synced) {
+				toast.success("The cycle is live — members can contribute now.", "Cycle started");
+			} else {
+				toast.warning(
+					"The cycle is live on-chain, but we couldn't sync that to our records yet. Refresh in a moment.",
+					"Cycle started",
+				);
+			}
 			refetch();
 			refetchChain();
 		} catch (err) {
@@ -343,10 +358,25 @@ export default function GroupPreviewPage() {
 			setSigning(true);
 			await contributeOnchain(data.onchain_group_id);
 			setSigning(false);
-			// Report success so the backend flips the row pending → confirmed
-			// (no chain indexer yet).
-			await contributionsApi.confirm(data.id).catch(() => {});
-			toast.success("Your contribution is on-chain.", "Contribution sent");
+			// Report success so the backend flips the row pending → confirmed. This
+			// independently re-reads the chain (it never trusts the client), so a
+			// failure here just means our records haven't caught up — the on-chain
+			// payment already succeeded either way. Surface that distinction rather
+			// than showing a flat success: a swallowed failure here previously left
+			// users staring at stale balances with no indication anything was wrong.
+			let confirmed = true;
+			await contributionsApi.confirm(data.id).catch(() => {
+				confirmed = false;
+			});
+
+			if (confirmed) {
+				toast.success("Your contribution is on-chain.", "Contribution sent");
+			} else {
+				toast.warning(
+					"Your money is on-chain, but we couldn't confirm it in our records yet. Refresh in a moment — it hasn't been lost.",
+					"Contribution sent",
+				);
+			}
 			refetch();
 		} catch (err) {
 			// Not `err instanceof Error ? err.message : ""` — a non-Error throw

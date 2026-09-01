@@ -178,12 +178,19 @@ static checking would have caught:
 pooler.** `DATABASE_URL` (Supabase's `:6543?pgbouncer=true`) recycles the
 underlying connection between statements, so an interactive
 `prisma.$transaction(async (tx) => …)` fails outright with P2028 ("Unable to
-start a transaction in the given time") the moment it's opened. `db.ts` now
-connects with `DIRECT_URL` (`:5432`, session mode) for everything, since every
-route that touches money uses `$transaction` for a real correctness reason.
-This is a genuine constraint on hosting, not a workaround: this app needs a
-session-capable Postgres connection at RUNTIME, not only at migrate time —
-factor that into the connection-pooling gap below.
+start a transaction in the given time") the moment it's opened. This is a
+genuine constraint on hosting, not a workaround: this app needs a
+session-capable Postgres connection at RUNTIME, not only at migrate time.
+
+`db.ts` originally routed *everything* through `DIRECT_URL` to work around
+this, on the reasoning that every route touching money uses `$transaction`
+anyway. That traded away the pooler's entire purpose and exhausted the
+session-mode budget in production under ordinary concurrent page-load traffic
+(`EMAXCONNSESSION`, pool_size 15) — see the gap below, which called this
+outcome in advance. `db.ts` now runs two clients: `prisma` (pooled,
+`DATABASE_URL`) for every plain query, and a private session-mode client used
+only inside `withTransaction`, for the handful of routes that actually open
+an interactive transaction.
 
 **Even on the direct connection, expect occasional P2028 on Supabase's free
 tier.** One `$transaction` call failed on first attempt and succeeded
@@ -213,23 +220,33 @@ Honest list of what is not done or not production-ready.
    harmless than it sounds: the correction may not arrive until midnight.
    `after()` is not a queue. Anything that genuinely must complete needs a real
    job runner.
-5. **The runtime client now uses the DIRECT (session-mode) connection, not the
-   pooler** — see "Verified against a live database" above for why. That
-   trades away exactly the protection the pooler exists for: serverless opens
-   one connection per instance, and a session-mode Postgres has a hard cap on
-   concurrent sessions (Supabase free tier: ~60). This WILL exhaust under any
-   real concurrent load. Before shipping past a handful of users, either (a)
-   move the interactive `$transaction` calls to Prisma's `queryRaw`-based
-   advisory locks so plain pooled queries suffice, or (b) put PgBouncer in
-   session mode in front of a larger connection cap. Don't deploy multiple
-   serverless instances against the current setup without addressing this.
+5. **~~The runtime client now uses the DIRECT (session-mode) connection, not
+   the pooler~~ — fixed.** Plain queries now use the pooled `DATABASE_URL`
+   client (`prisma`, exported from `db.ts`); only `withTransaction` touches
+   the session-mode `DIRECT_URL` client, and only for the handful of routes
+   that open a real interactive `$transaction`. This happened in production
+   before the fix landed: `EMAXCONNSESSION ... pool_size: 15` on
+   `/api/dashboard`, `/api/profile`, `/api/notifications` — none of which run
+   a transaction — because a single page load fans those out concurrently and
+   each one was claiming a session-mode slot it didn't need. Supabase's
+   session-mode cap on this project is 15, not the ~60 this note originally
+   assumed — worth re-checking against the actual plan rather than trusting
+   that number.
 
-   Note the auth path amplifies this: `userFromRequest` does a token lookup plus
-   a `lastUsedAt` write on **every** authenticated request, so the floor is two
-   round trips per request before any handler work. And `withTransaction`
-   retrying P2028 three times will mask genuine connection exhaustion as
-   latency rather than surfacing it as an error — if requests get slow before
-   they get failures, look here first.
+   If session-mode exhaustion recurs even with plain reads off it (i.e. real
+   transaction load alone exceeds the budget), the remaining options are (a)
+   move some interactive `$transaction` calls to `queryRaw`-based advisory
+   locks so they can run on the pooled connection too, or (b) a larger
+   session-mode connection cap (paid Supabase tier).
+
+   Note the auth path amplifies load on whichever client it uses:
+   `userFromRequest` does a token lookup plus a `lastUsedAt` write on **every**
+   authenticated request, so the floor is two round trips per request before
+   any handler work — these are plain queries, so they're on the pooled client
+   now, not the scarce one. And `withTransaction` retrying P2028 three times
+   will mask genuine connection exhaustion as latency rather than surfacing it
+   as an error — if requests get slow before they get failures, look here
+   first.
 
 6. **No test suite.** The contracts have `test.rs`; this layer — which now owns
    every money decision the database makes — has none. CI runs `typecheck`,

@@ -1,8 +1,8 @@
 /**
- * Prisma client singleton.
+ * Prisma client singletons.
  *
  * Next.js dev mode hot-reloads modules on every edit. Without caching the
- * client on `globalThis`, each reload opens a fresh connection pool and the
+ * clients on `globalThis`, each reload opens a fresh connection pool and the
  * database runs out of connections within a few minutes of editing.
  */
 
@@ -11,6 +11,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 
 const globalForPrisma = globalThis as unknown as {
 	prisma: PrismaClient | undefined;
+	prismaDirect: PrismaClient | undefined;
 };
 
 /**
@@ -29,36 +30,40 @@ export type PrismaTransaction = Omit<
  * Prisma 7 takes the connection through a driver adapter rather than a `url`
  * in the schema.
  *
- * `DATABASE_URL` must point at a POOLED, TRANSACTION-mode endpoint in
- * production (e.g. Supabase's `:6543?pgbouncer=true`) — each serverless
- * instance opens its own pool, so a direct connection runs out of slots under
- * load.
+ * There are TWO connection strings and TWO clients, because a single one
+ * cannot satisfy both constraints below at once:
  *
- * BUT: `prisma.$transaction(async (tx) => …)` opens an interactive,
- * multi-statement transaction, and a transaction-mode pooler recycles the
- * underlying connection between statements — it cannot hold one open across a
- * round trip. Every interactive transaction on that pooler fails with
- * "Unable to start a transaction in the given time" (P2028). This bit us in
- * dev: `/auth/register/verify-otp` 500s the moment it calls `$transaction`,
- * confirmed against a real Supabase pooler connection, not simulated.
+ * - `prisma.$transaction(async (tx) => …)` opens an interactive,
+ *   multi-statement transaction, and a transaction-mode pgbouncer pooler
+ *   recycles the underlying connection between statements — it cannot hold
+ *   one open across a round trip. Every interactive transaction on that
+ *   pooler fails with "Unable to start a transaction in the given time"
+ *   (P2028). This bit us in dev: `/auth/register/verify-otp` 500s the moment
+ *   it calls `$transaction`, confirmed against a real Supabase pooler
+ *   connection, not simulated. So `$transaction` needs `DIRECT_URL`
+ *   (session-mode, e.g. Supabase's `:5432`).
+ * - Session mode has a hard, project-wide cap on total concurrent clients
+ *   (observed in production: `(EMAXCONNSESSION) max clients reached in
+ *   session mode - max clients are limited to pool_size: 15`) — shared across
+ *   every serverless instance that connects. Routing plain, non-transactional
+ *   reads through it too (as an earlier version of this file did, "simplest
+ *   correct fix is: use the DIRECT connection everywhere") burns that scarce
+ *   budget on queries that never needed session semantics, and a page that
+ *   fans out several reads at once (e.g. dashboard + profile + notifications
+ *   on load) can exhaust it under perfectly ordinary concurrent traffic.
  *
- * The fix is `DIRECT_URL` (session-mode, e.g. Supabase's `:5432`) for
- * anything that opens an interactive transaction, while plain queries still
- * use the pooled connection sparingly. Since every route in this codebase that
- * touches money uses `$transaction` for a real correctness reason — atomic OTP
- * consumption, exactly-one-primary-destination swaps, position renumbering —
- * simplest correct fix is: use the DIRECT connection everywhere. It does mean
- * this app needs a session-capable Postgres connection at runtime, not only at
- * migrate time; that's a real constraint to carry into the hosting choice, not
- * a temporary workaround.
+ * So: `prisma` (pooled, `DATABASE_URL`, transaction-mode pgbouncer) is what
+ * every plain query should use — it's what `import { prisma } from
+ * "@/server/db"` gives you, and that pooler's connection budget is much
+ * larger since it's shared/multiplexed rather than one-session-per-client.
+ * `withTransaction` below is the ONLY thing that touches the direct,
+ * session-mode client — reserving that scarce 15-connection budget for the
+ * handful of routes that have a real correctness reason to need it (atomic
+ * OTP consumption, exactly-one-primary-destination swaps, position
+ * renumbering). Do not call `.$transaction` on `prisma` directly, and do not
+ * import or export the direct client for general use.
  */
-function createClient(): PrismaClient {
-	const connectionString = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
-
-	if (!connectionString) {
-		throw new Error("DATABASE_URL (or DIRECT_URL) is not set.");
-	}
-
+function createClient(connectionString: string, poolMax: number): PrismaClient {
 	return new PrismaClient({
 		// The first argument is a full `pg.PoolConfig`, not just a URL.
 		//
@@ -77,18 +82,7 @@ function createClient(): PrismaClient {
 			// just to hand over a connection from this network, so 10s leaves
 			// very little headroom on a cold pool.
 			connectionTimeoutMillis: 20_000,
-			// THE IMPORTANT ONE. node-postgres defaults `max` to 10, and
-			// Supavisor's SESSION mode allows this project 15 clients IN TOTAL —
-			// across every process that connects. So a single Prisma client can
-			// claim two thirds of the budget on its own, and a laptop running
-			// `next dev` alongside one warm Vercel lambda already asks for 20 and
-			// gets `(EMAXCONNSESSION) max clients reached in session mode`.
-			//
-			// 3 lets roughly five instances coexist within the 15. It does not
-			// fix the underlying design — see the note above about why the
-			// runtime is on the session connection at all — it just stops one
-			// instance from starving every other one.
-			max: 3,
+			max: poolMax,
 		}),
 		log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
 		transactionOptions: {
@@ -104,10 +98,30 @@ function createClient(): PrismaClient {
 	});
 }
 
-export const prisma = globalForPrisma.prisma ?? createClient();
+function requireEnv(name: "DATABASE_URL" | "DIRECT_URL"): string {
+	const value = process.env[name];
+	if (!value) throw new Error(`${name} is not set.`);
+	return value;
+}
+
+export const prisma =
+	globalForPrisma.prisma ??
+	// node-postgres defaults `max` to 10; the transaction-mode pooler
+	// multiplexes many logical clients over a shared backend pool, so this
+	// isn't fighting the same 15-session cap the direct client below is.
+	createClient(requireEnv("DATABASE_URL"), 10);
+
+// THE IMPORTANT ONE for the session-mode budget. Supavisor's SESSION mode
+// allows this project 15 clients IN TOTAL across every process that
+// connects, and this client is now used only by `withTransaction` — 3 lets
+// roughly five instances coexist within that budget even if every one of
+// them happens to be mid-transaction at once.
+const prismaDirect =
+	globalForPrisma.prismaDirect ?? createClient(requireEnv("DIRECT_URL"), 3);
 
 if (process.env.NODE_ENV !== "production") {
 	globalForPrisma.prisma = prisma;
+	globalForPrisma.prismaDirect = prismaDirect;
 }
 
 /**
@@ -133,7 +147,7 @@ export async function withTransaction<T>(
 ): Promise<T> {
 	for (let attempt = 1; attempt <= attempts; attempt++) {
 		try {
-			return await prisma.$transaction(fn);
+			return await prismaDirect.$transaction(fn);
 		} catch (error) {
 			const isP2028 =
 				error instanceof Prisma.PrismaClientKnownRequestError &&
