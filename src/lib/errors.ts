@@ -65,3 +65,31 @@ export function displayError(err: unknown, fallback: string): string {
 	console.error("Unrecognized error value:", err);
 	return fallback;
 }
+
+/**
+ * `txBadAuth` is a classic Stellar transaction-envelope result — the network
+ * rejecting the signature outright, before the contract's own logic ever
+ * runs. Distinct from a contract revert (e.g. `#8 AlreadyContributed`), which
+ * means the request was well-formed but the answer is no.
+ *
+ * The near-universal cause in this app's flow: the wallet extension had more
+ * than one account, and the ACTIVE one in the extension at the moment of
+ * approving drifted away from the address the transaction was actually built
+ * for (read once, earlier, via `currentAddress()`) — many extensions sign
+ * with whichever account is currently selected in their own UI rather than
+ * strictly enforcing the address the calling site requested. The result is a
+ * transaction that names one account as the only valid signer, signed by a
+ * different one's key.
+ *
+ * Without this, the raw error surfaces as an unrecognized JSON dump via
+ * `displayError`'s fallback — technically accurate, useless to a user mid
+ * wallet-approval flow.
+ */
+export function isBadAuthError(err: unknown): boolean {
+	return /txBadAuth|"name":\s*"txBadAuth"|_switch.*txBadAuth/i.test(
+		errorMessage(err),
+	);
+}
+
+export const BAD_AUTH_MESSAGE =
+	"Your wallet signed with a different account than expected. If you have more than one account in your wallet, make sure the one connected to Saji is also the active one selected in your wallet extension, then try again.";

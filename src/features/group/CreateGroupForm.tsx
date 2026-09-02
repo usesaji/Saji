@@ -35,6 +35,7 @@ import { toast } from "../../lib/utils/toast";
 import { useSavingsContract } from "../../lib/hooks/useSavingsContract";
 import { TOKEN_LIST, requireToken } from "../../lib/contract/tokens";
 import { cycleSecondsFor, labelize } from "./group-view";
+import { BAD_AUTH_MESSAGE, isBadAuthError } from "../../lib/errors";
 
 // ---------------------------------------------------------------------------
 // Options
@@ -327,8 +328,12 @@ export default function CreateGroupForm() {
 		} catch (err) {
 			setErrors(fieldErrors(err));
 			toast.error(
-				err instanceof ApiError ? err.message : "Something went wrong.",
-				"Could not create group",
+				isBadAuthError(err)
+					? BAD_AUTH_MESSAGE
+					: err instanceof ApiError
+						? err.message
+						: "Something went wrong.",
+				isBadAuthError(err) ? "Wrong account signed" : "Could not create group",
 			);
 			setStep(1); // send them back to fix field errors
 		} finally {

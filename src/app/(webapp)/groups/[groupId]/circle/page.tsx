@@ -25,7 +25,7 @@ import { addTrustline } from "@/lib/wallet";
 import { toast } from "@/lib/utils/toast";
 import { formatStroops, toStroopsOrZero } from "@/lib/stroops";
 import { formatCountdown } from "@/features/group/group-view";
-import { displayError, errorMessage } from "@/lib/errors";
+import { BAD_AUTH_MESSAGE, displayError, errorMessage, isBadAuthError } from "@/lib/errors";
 
 const AVATAR = "/images/user.jpg";
 
@@ -247,6 +247,8 @@ export default function CircleDashboardPage() {
 				);
 			} else if (/User (declined|rejected)|cancell?ed/i.test(raw)) {
 				toast.error("You cancelled the signature.", "Cancelled");
+			} else if (isBadAuthError(err)) {
+				toast.error(BAD_AUTH_MESSAGE, "Wrong account signed");
 			} else if (/insufficient|balance/i.test(raw)) {
 				toast.error(
 					`Not enough ${assetCode} in your wallet to contribute.`,

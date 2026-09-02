@@ -11,6 +11,7 @@ import { groups as groupsApi, ApiError } from "@/lib/api";
 import { useSavingsContract } from "@/lib/hooks/useSavingsContract";
 import { pageRoutes } from "@/config/routes";
 import { toast } from "@/lib/utils/toast";
+import { BAD_AUTH_MESSAGE, isBadAuthError } from "@/lib/errors";
 
 const AVATAR = "/images/user.jpg";
 
@@ -176,6 +177,8 @@ export default function PayoutOrderPage() {
 					"The on-chain member list doesn't match this order — someone approved in the app hasn't been added to the chain yet.",
 					"Members out of sync",
 				);
+			} else if (isBadAuthError(err)) {
+				toast.error(BAD_AUTH_MESSAGE, "Wrong account signed");
 			} else {
 				toast.error(
 					err instanceof ApiError ? err.message : msg || "Could not save the order.",

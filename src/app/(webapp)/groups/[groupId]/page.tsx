@@ -20,7 +20,7 @@ import { useSavingsContract } from "@/lib/hooks/useSavingsContract";
 import { requireToken } from "@/lib/contract/tokens";
 import { addTrustline } from "@/lib/wallet";
 import { toast } from "@/lib/utils/toast";
-import { displayError, errorMessage } from "@/lib/errors";
+import { BAD_AUTH_MESSAGE, displayError, errorMessage, isBadAuthError } from "@/lib/errors";
 
 
 export default function GroupPreviewPage() {
@@ -222,6 +222,8 @@ export default function GroupPreviewPage() {
 				);
 			} else if (/User (declined|rejected)|cancell?ed/i.test(msg)) {
 				toast.error("You cancelled the signature.", "Cancelled");
+			} else if (isBadAuthError(err)) {
+				toast.error(BAD_AUTH_MESSAGE, "Wrong account signed");
 			} else {
 				toast.error(
 					err instanceof ApiError ? err.message : msg || "Could not activate the circle.",
@@ -280,6 +282,8 @@ export default function GroupPreviewPage() {
 					"This circle isn't in a state that can be started — it may already be active or completed.",
 					"Cannot start",
 				);
+			} else if (isBadAuthError(err)) {
+				toast.error(BAD_AUTH_MESSAGE, "Wrong account signed");
 			} else if (/auth|require_auth|signature|not authorized/i.test(msg)) {
 				toast.error(
 					"Only the organizer's wallet can start the cycle. Make sure the organizer's wallet is connected.",
@@ -321,6 +325,8 @@ export default function GroupPreviewPage() {
 				);
 			} else if (/User (declined|rejected)|cancell?ed/i.test(msg)) {
 				toast.error("You cancelled the signature.", "Cancelled");
+			} else if (isBadAuthError(err)) {
+				toast.error(BAD_AUTH_MESSAGE, "Wrong account signed");
 			} else {
 				toast.error(msg || "Could not resolve the default.", "Failed");
 			}
@@ -402,6 +408,8 @@ export default function GroupPreviewPage() {
 				);
 			} else if (/User (declined|rejected)|cancell?ed/i.test(raw)) {
 				toast.error("You cancelled the signature.", "Cancelled");
+			} else if (isBadAuthError(err)) {
+				toast.error(BAD_AUTH_MESSAGE, "Wrong account signed");
 			} else {
 				toast.error(
 					err instanceof ApiError

@@ -23,6 +23,7 @@ import { currentAddress, hasTrustline } from "@/lib/wallet";
 import { requireToken } from "@/lib/contract/tokens";
 import { formatStroops, fromStroops } from "@/lib/stroops";
 import { pageRoutes } from "@/config/routes";
+import { BAD_AUTH_MESSAGE, isBadAuthError } from "@/lib/errors";
 
 const STELLAR_ADDR = /^G[A-Z2-7]{55}$/;
 
@@ -520,6 +521,7 @@ function describe(err: unknown): string {
 	if (/#16\b|NothingToClaim/i.test(raw)) {
 		return "This payout has already been withdrawn.";
 	}
+	if (isBadAuthError(err)) return BAD_AUTH_MESSAGE;
 	if (err instanceof ApiError) return err.message;
 	return raw || "Something went wrong.";
 }
