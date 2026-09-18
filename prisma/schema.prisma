@@ -1,0 +1,606 @@
+// Saji backend schema — ported from the Laravel migrations in
+// `backend/database/migrations/`.
+//
+// Ported faithfully, including every unique constraint. Those constraints are
+// load-bearing: `contributions(group_id, user_id, cycle)` and
+// `payouts(group_id, cycle)` are what stop a retry or a double-submit from
+// recording the same money twice, and `challenge_deposits.stellar_tx_hash`
+// stops one transfer being counted as two saves.
+//
+// Money is `Decimal(20, 7)` everywhere — Stellar uses 7 decimal places. Never
+// widen these to Float; binary floating point cannot represent these values
+// exactly and the rounding error lands in user balances.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Prisma 7 removed `url` from the datasource block. The connection string now
+// lives in `prisma.config.ts` for the CLI, and reaches the client through a
+// driver adapter — see `src/server/db.ts`.
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums — mirror the Laravel `enum()` columns exactly.
+// ---------------------------------------------------------------------------
+
+enum GroupStatus {
+  draft
+  open
+  active
+  completed
+  cancelled
+}
+
+enum CircleKind {
+  rotating
+  challenge
+}
+
+enum GroupType {
+  public
+  private
+}
+
+enum PayoutOrder {
+  random
+  manual
+  vote
+  custom
+}
+
+enum LatePenalty {
+  deduct_from_balance
+  remove_member
+}
+
+// Presets the UI offers. `custom` carries an explicit `cycleLengthSeconds`.
+// Sub-daily options exist because the contract measures cycles in SECONDS and
+// short circles are genuinely useful (testing, and fast community savings).
+enum ContributionFrequency {
+  hourly
+  six_hourly
+  daily
+  two_daily
+  weekly
+  bi_weekly
+  monthly
+  quarterly
+  yearly
+  custom
+}
+
+enum MemberStatus {
+  pending
+  approved
+  active
+  removed
+}
+
+enum ContributionStatus {
+  pending
+  submitted
+  confirmed
+  failed
+}
+
+enum PayoutStatus {
+  pending
+  submitted
+  confirmed
+  failed
+}
+
+enum DepositStatus {
+  pending
+  confirmed
+  failed
+}
+
+enum TransactionType {
+  create_group
+  join
+  contribution
+  payout
+  other
+}
+
+enum TransactionStatus {
+  pending
+  success
+  failed
+}
+
+enum Gender {
+  male
+  female
+  other
+  prefer_not_to_say
+}
+
+enum MemoType {
+  text
+  id
+  none
+}
+
+// ---------------------------------------------------------------------------
+// Users
+// ---------------------------------------------------------------------------
+
+model User {
+  id              BigInt    @id @default(autoincrement())
+  name            String
+  tagName         String?   @unique @map("tag_name")
+  email           String    @unique
+  emailVerifiedAt DateTime? @map("email_verified_at")
+
+  // Null for Google-only users, who never set a password.
+  password String?
+
+  googleId  String? @unique @map("google_id")
+  avatarUrl String? @map("avatar_url")
+
+  // The LINKED wallet address only. Saji is non-custodial: the backend never
+  // holds a secret key, so this is always a public G... address.
+  stellarAddress String? @unique @map("stellar_address")
+
+  dateOfBirth DateTime? @map("date_of_birth") @db.Date
+  gender      Gender?
+  address     String?
+
+  /// Opt-out for emailed notifications. In-app notifications are always
+  /// written — they are the user's own history, not an interruption.
+  notifyByEmail Boolean @default(true) @map("notify_by_email")
+
+  // Password & Security settings.
+  twofaOnSuspiciousWithdrawal Boolean   @default(false) @map("twofa_on_suspicious_withdrawal")
+  lockAfterFailedAttempts     Int       @default(5) @map("lock_after_failed_attempts") @db.SmallInt
+  failedLoginAttempts         Int       @default(0) @map("failed_login_attempts") @db.SmallInt
+  lockedUntil                 DateTime? @map("locked_until")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  organizedGroups   Group[]            @relation("GroupOrganizer")
+  nextPayoutGroups  Group[]            @relation("GroupNextRecipient")
+  memberships       GroupMember[]
+  contributions     Contribution[]
+  payouts           Payout[]
+  transactions      Transaction[]
+  withdrawInfos     WithdrawInfo[]
+  challengeDeposits ChallengeDeposit[]
+  tokens            AccessToken[]
+  oauthHandoffs     OauthHandoff[]
+  notifications     Notification[]
+
+  @@map("users")
+}
+
+/// Replaces Sanctum's `personal_access_tokens`. Only the SHA-256 hash of the
+/// token is stored, so a database leak does not hand out live sessions.
+model AccessToken {
+  id         BigInt    @id @default(autoincrement())
+  userId     BigInt    @map("user_id")
+  name       String
+  tokenHash  String    @unique @map("token_hash")
+  lastUsedAt DateTime? @map("last_used_at")
+  expiresAt  DateTime? @map("expires_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("access_tokens")
+}
+
+/// Signup OTP + the single-use token that proves an email was verified.
+///
+/// The signup token is the security-critical part: without it, step 3 of
+/// registration would create an account for any email an attacker typed, and
+/// verification would be decorative.
+model OtpCode {
+  id     BigInt @id @default(autoincrement())
+  email  String
+  // Empty string once the code has been consumed, so it cannot be replayed.
+  codeHash String @map("code_hash")
+  attempts Int    @default(0) @db.SmallInt
+
+  expiresAt DateTime @map("expires_at")
+
+  signupTokenHash String?   @unique @map("signup_token_hash")
+  verifiedAt      DateTime? @map("verified_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([email])
+  @@map("otp_codes")
+}
+
+/// The OAuth callback's handoff to its landing page.
+///
+/// The callback is a full-page redirect (Google sends the browser here
+/// directly) so it cannot return JSON — it cannot hand back the real bearer
+/// token without putting it on the URL, where it would sit in browser
+/// history and be exposed to anything that reads `window.location` before
+/// the landing page clears it. Instead it mints one of these: `codeHash`
+/// goes on the URL, `token` is redeemed for exactly once via a POST body.
+///
+/// DB-backed rather than an in-memory Map because the callback and the
+/// exchange request are two separate HTTP requests that are not guaranteed
+/// to land on the same serverless instance.
+model OauthHandoff {
+  id   BigInt @id @default(autoincrement())
+  // Only the hash is stored — same reasoning as AccessToken.tokenHash.
+  codeHash String @unique @map("code_hash")
+
+  /// WHO the code redeems for — never a token.
+  ///
+  /// This column used to hold the real 30-day bearer token in PLAINTEXT, beside
+  /// a carefully-hashed code, which made the hashing beside it pointless: the
+  /// table was a list of live credentials. Hashing it is not an option (the
+  /// value has to be handed back), so the token is no longer stored at all —
+  /// it is minted at redemption from this user id instead. Nothing at rest is
+  /// usable as a credential.
+  userId BigInt @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  expiresAt DateTime @map("expires_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@index([userId])
+  @@map("oauth_handoffs")
+}
+
+/// Proof-of-control challenge for linking a Stellar wallet.
+///
+/// `PATCH /api/profile/wallet` must not accept an address the caller doesn't
+/// actually hold the key for — see `src/server/wallet-proof.ts`. This is the
+/// nonce issued for one address to sign; only one may be active per address
+/// (a fresh challenge invalidates any earlier unredeemed one for the same
+/// address, so a stale request can't be replayed after a new one is issued).
+///
+/// DB-backed for the same cross-instance reason as OauthHandoff: the
+/// challenge is issued by one request and redeemed by a separate one.
+model WalletChallenge {
+  id      BigInt @id @default(autoincrement())
+  address String @unique
+
+  nonce String
+
+  expiresAt DateTime @map("expires_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("wallet_challenges")
+}
+
+// ---------------------------------------------------------------------------
+// Groups (savings circles — Ajo / Esusu / Susu)
+// ---------------------------------------------------------------------------
+
+/// The Soroban contract is the source of truth for money and rotation. This
+/// table MIRRORS that on-chain state and holds off-chain metadata (name,
+/// description, photo) that does not belong on-chain.
+/// Fixed-window rate-limit counters.
+///
+/// Lives in Postgres rather than process memory because serverless instances do
+/// not share memory: an in-memory limiter enforces "6 per minute PER WARM
+/// INSTANCE", which under any real load is not a limit at all. The auth
+/// endpoints this guards are low-volume, so the extra round-trip is cheap next
+/// to the brute-force protection it actually provides.
+model RateLimit {
+  /// The bucket key, e.g. "login:1.2.3.4". Unique so an upsert is atomic.
+  key       String   @id
+  count     Int      @default(0)
+  /// When the current window ends; a request after this resets the counter.
+  resetAt   DateTime @map("reset_at")
+
+  @@index([resetAt])
+  @@map("rate_limits")
+}
+
+model Group {
+  id          BigInt  @id @default(autoincrement())
+  name        String
+  description String?
+  photoUrl    String? @map("photo_url")
+
+  organizerId BigInt @map("organizer_id")
+
+  // Every group is a group_id inside ONE shared Soroban contract, not a
+  // contract per group. Null until the create_group tx confirms on-chain.
+  onchainGroupId  BigInt? @unique @map("onchain_group_id")
+  contractAddress String? @map("contract_address")
+
+  assetCode   String  @default("USDC") @map("asset_code")
+  assetIssuer String? @map("asset_issuer")
+
+  contributionAmount    Decimal               @map("contribution_amount") @db.Decimal(20, 7)
+  targetAmount          Decimal?              @map("target_amount") @db.Decimal(20, 7)
+  // SECONDS, matching the contract's `cycle_length` exactly so the two can be
+  // compared without a unit conversion (see describeConfigMismatch). Days could
+  // not express the hourly/6-hourly presets, and every conversion between the
+  // two units was a place for a units bug to hide.
+  cycleLengthSeconds    Int                   @default(604800) @map("cycle_length_seconds")
+  contributionFrequency ContributionFrequency @default(weekly) @map("contribution_frequency")
+
+  feeBps           Int         @default(0) @map("fee_bps") @db.SmallInt
+  lateFeeBps       Int         @default(0) @map("late_fee_bps") @db.SmallInt
+  gracePeriodHours Int         @default(0) @map("grace_period_hours")
+  latePenalty      LatePenalty @default(deduct_from_balance) @map("late_penalty")
+
+  payoutOrder     PayoutOrder @default(manual) @map("payout_order")
+  groupType       GroupType   @default(private) @map("group_type")
+  autoApproveJoin Boolean     @default(false) @map("auto_approve_join")
+  hideBalances    Boolean     @default(false) @map("hide_balances")
+
+  // Unguessable token for join-by-link.
+  inviteToken String? @unique @map("invite_token") @db.VarChar(40)
+
+  status     GroupStatus @default(draft)
+  circleKind CircleKind  @default(rotating) @map("circle_kind")
+
+  // Challenge circles only; null for rotating.
+  savingsTarget   Decimal?  @map("savings_target") @db.Decimal(20, 7)
+  challengeEndsAt DateTime? @map("challenge_ends_at")
+
+  currentCycle    Int       @default(0) @map("current_cycle")
+  nextRecipientId BigInt?   @map("next_recipient_id")
+  nextPayoutAt    DateTime? @map("next_payout_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  organizer     User               @relation("GroupOrganizer", fields: [organizerId], references: [id], onDelete: Cascade)
+  nextRecipient User?              @relation("GroupNextRecipient", fields: [nextRecipientId], references: [id], onDelete: SetNull)
+  members       GroupMember[]
+  contributions Contribution[]
+  payouts       Payout[]
+  transactions  Transaction[]
+  deposits      ChallengeDeposit[]
+
+  @@index([circleKind])
+  @@index([organizerId])
+  // `status: { in: [...] }` on the dashboard and the challenge browse list.
+  @@index([status])
+  @@map("groups")
+}
+
+model GroupMember {
+  id      BigInt @id @default(autoincrement())
+  groupId BigInt @map("group_id")
+  userId  BigInt @map("user_id")
+
+  status MemberStatus @default(pending)
+
+  // 1-based position in the rotation. Null until the member is admitted and
+  // the order is fixed on-chain.
+  payoutPosition   Int?     @map("payout_position")
+  hasReceivedPayout Boolean @default(false) @map("has_received_payout")
+
+  joinedAt  DateTime? @map("joined_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // A user joins a given group at most once.
+  @@unique([groupId, userId])
+  // The composite unique above starts with groupId, so Postgres cannot use it
+  // for "which circles is THIS user in" — the query behind /api/dashboard,
+  // /api/wallet/my-circles and /api/wallet/saji-balance.
+  @@index([userId, status])
+  @@map("group_members")
+}
+
+// ---------------------------------------------------------------------------
+// Money
+// ---------------------------------------------------------------------------
+
+model Contribution {
+  id      BigInt @id @default(autoincrement())
+  groupId BigInt @map("group_id")
+  userId  BigInt @map("user_id")
+
+  cycle  Int
+  amount Decimal @db.Decimal(20, 7)
+
+  status ContributionStatus @default(pending)
+
+  stellarTxHash String?   @unique @map("stellar_tx_hash")
+  confirmedAt   DateTime? @map("confirmed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // One contribution per member per cycle — enforced on-chain too.
+  @@unique([groupId, userId, cycle])
+  // Leading column of the unique is groupId, so neither of these is covered:
+  // the user's own contribution history, and the per-group confirmed-sum used
+  // for pool_balance on the circle and group dashboards.
+  @@index([userId, status])
+  @@index([groupId, status])
+  @@map("contributions")
+}
+
+model Payout {
+  id          BigInt @id @default(autoincrement())
+  groupId     BigInt @map("group_id")
+  recipientId BigInt @map("recipient_id")
+
+  cycle       Int
+  grossAmount Decimal @map("gross_amount") @db.Decimal(20, 7)
+  feeAmount   Decimal @default(0) @map("fee_amount") @db.Decimal(20, 7)
+  netAmount   Decimal @map("net_amount") @db.Decimal(20, 7)
+
+  status PayoutStatus @default(pending)
+
+  stellarTxHash String?   @unique @map("stellar_tx_hash")
+  confirmedAt   DateTime? @map("confirmed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  group     Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  recipient User  @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  // One payout per group per cycle.
+  @@unique([groupId, cycle])
+  // Filtered on every dashboard and payout-summary request; there was no index
+  // on this FK at all, so those endpoints sequential-scanned the table.
+  @@index([recipientId])
+  @@map("payouts")
+}
+
+/// A member's save into a challenge circle, backed by one on-chain transfer.
+model ChallengeDeposit {
+  id      BigInt @id @default(autoincrement())
+  groupId BigInt @map("group_id")
+  userId  BigInt @map("user_id")
+
+  amount Decimal @db.Decimal(20, 7)
+
+  // Unique so the same transfer can never be counted twice.
+  stellarTxHash String        @unique @map("stellar_tx_hash")
+  status        DepositStatus @default(pending)
+  confirmedAt   DateTime?     @map("confirmed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([groupId, userId])
+  @@map("challenge_deposits")
+}
+
+/// Ledger of on-chain actions. `stellarTxHash` is nullable because a row is
+/// created when an action is initiated, before a hash exists.
+model Transaction {
+  id      BigInt  @id @default(autoincrement())
+  groupId BigInt? @map("group_id")
+  userId  BigInt? @map("user_id")
+
+  type TransactionType @default(other)
+
+  // Laravel's nullableMorphs() — the domain row this tx settled.
+  subjectType String? @map("subject_type")
+  subjectId   BigInt? @map("subject_id")
+
+  stellarTxHash String?           @unique @map("stellar_tx_hash")
+  status        TransactionStatus @default(pending)
+
+  // Cached so an explorer link needs no second lookup.
+  explorerUrl String? @map("explorer_url")
+
+  meta Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  group Group? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  user  User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([subjectType, subjectId])
+  @@index([userId])
+  @@index([groupId])
+  @@map("transactions")
+}
+
+/// What kind of completed action a notification is about. The value is also the
+/// switch key the email templates and the in-app icon render from, so adding a
+/// variant means adding a case in `src/server/notifications.ts`.
+enum NotificationType {
+  /// Someone asked to join a circle you organize.
+  join_requested
+  /// Your request to join a circle was approved.
+  join_approved
+  /// A member's contribution for the cycle was confirmed on-chain.
+  contribution_confirmed
+  /// A circle payout was earmarked for you and is ready to claim.
+  payout_received
+  /// A withdrawal you made left the app.
+  withdrawal_sent
+  /// A circle you are in finished its last rotation.
+  circle_completed
+}
+
+/// An instant, per-user notification raised the moment an action COMPLETES.
+///
+/// Event-driven on purpose: emitted from `after()` at the point the action
+/// finishes, never discovered by a scheduled sweep. That is what makes it
+/// instant, and it is also why every emit needs `dedupeKey` — the indexer is
+/// idempotent and re-runs constantly, so the same completed payout is observed
+/// on many passes and must only ever notify once.
+model Notification {
+  id     BigInt @id @default(autoincrement())
+  userId BigInt @map("user_id")
+
+  type NotificationType
+
+  /// Rendered as-is in the bell list. Written at emit time rather than
+  /// templated at read time, so a later copy change cannot rewrite history.
+  title String
+  body  String
+
+  /// Where clicking it should go, e.g. `/groups/12/circle`. Relative so it
+  /// survives a domain change.
+  href String?
+
+  /// Free-form payload for the UI (amount, asset code, group name).
+  meta Json?
+
+  /// IDEMPOTENCY KEY, and the whole reason repeated reconciles don't spam.
+  /// Deterministic per real-world event — `payout:{payoutId}`,
+  /// `contribution:{contributionId}` — so a second attempt to raise the same
+  /// notification collides here instead of sending a duplicate email.
+  dedupeKey String @unique @map("dedupe_key")
+
+  readAt DateTime? @map("read_at")
+
+  /// When the email actually went out. Null means in-app only: either the user
+  /// opted out, or the send failed and was swallowed so it could not fail the
+  /// action that triggered it.
+  emailedAt DateTime? @map("emailed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Drives the bell: unread-first, newest-first, scoped to one user.
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+/// Where a user withdraws to. Multiple per user, one flagged primary.
+model WithdrawInfo {
+  id     BigInt @id @default(autoincrement())
+  userId BigInt @map("user_id")
+
+  stellarAddress String   @map("stellar_address")
+  memo           String?
+  memoType       MemoType @default(none) @map("memo_type")
+
+  // Label the user recognises, e.g. "Binance" or "Bank".
+  destinationLabel String? @map("destination_label")
+  isPrimary        Boolean @default(false) @map("is_primary")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("withdraw_infos")
+}

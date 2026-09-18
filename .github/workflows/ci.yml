@@ -1,0 +1,69 @@
+# CI gates for the Next.js app.
+#
+# Everything here is deliberately network-free and secret-free so it runs on
+# every push, including from forks. The one check that needs a live contract
+# (`check:bindings`, which queries the deployed interface via the `stellar` CLI)
+# stays a manual/local script — see the note at the bottom.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# A newer push to the same branch makes an in-flight run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `prisma generate` writes the client that typecheck needs. It reads the
+      # schema only — no database connection is opened.
+      - name: Generate Prisma client
+        run: pnpm prisma generate
+
+      # Positional ScVal arguments vs. the generated bindings. This is the check
+      # that a wrong-order contract call fails, and it is the cheapest one here:
+      # pure static analysis, no network, no contract id. See the header of
+      # scripts/check-call-sites.mjs for the failure it exists to prevent.
+      - name: Contract call sites match bindings
+        run: pnpm check:call-sites
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # NON-BLOCKING, deliberately. `pnpm lint` currently reports ~439 errors and
+      # ~2700 warnings on code that predates this workflow (mostly
+      # react-hooks/set-state-in-effect and no-unused-vars). Making it a hard
+      # gate would mean CI is red on its first run, which trains everyone to
+      # ignore it — the opposite of the point.
+      #
+      # It runs so the count is visible and can be driven down; flip
+      # `continue-on-error` off once it reaches zero. Do NOT add new lint errors
+      # in the meantime.
+      - name: Lint (advisory until the existing backlog is cleared)
+        run: pnpm lint
+        continue-on-error: true
+
+# NOT run here: `pnpm check:bindings`. It shells out to the `stellar` CLI and
+# reads a DEPLOYED contract, so it needs network access and a contract id, and
+# would fail or silently skip on every PR. Run it locally after redeploying a
+# contract or regenerating bindings.

@@ -1,0 +1,36 @@
+name: Chain index reconcile
+
+# Vercel's own daily cron (vercel.json, 00:00 UTC) is the Hobby plan's ceiling,
+# not a real reconcile cadence — see src/server/ARCHITECTURE.md, "Do we still
+# need the cron?". This workflow is the free way to close that gap: it hits
+# the same idempotent endpoint every few minutes, so a failed inline reconcile
+# (a member contributes, the DB write fails, nothing corrects it) self-heals
+# in single-digit minutes instead of up to a day.
+#
+# Requires a repo secret CRON_SECRET with the SAME value as the CRON_SECRET
+# environment variable set in Vercel for this project (Settings → Environment
+# Variables). Add it under Settings → Secrets and variables → Actions.
+#
+# Safe to run alongside the Vercel cron and any inline reconcile — runIndexer
+# is explicitly designed to be safe when overlapping or retried.
+
+on:
+  schedule:
+    # Every 5 minutes — GitHub Actions' minimum granularity. Actual firing can
+    # lag a few minutes under GitHub's own load; still closes the gap from "up
+    # to 24h" down to single-digit minutes in the common case.
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger chain-index reconcile
+        run: |
+          curl -sf -X GET "https://usesaji.com/api/cron/chain-index" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            --max-time 55
